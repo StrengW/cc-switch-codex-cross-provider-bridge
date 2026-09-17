@@ -31,6 +31,16 @@ class QuickStartPathContractTests(unittest.TestCase):
         self.assertNotIn("api.github.com/repos", text)
         self.assertNotIn("releases/latest", text.lower())
 
+    def test_source_quickstart_replaces_stale_packaged_bridge_runtime(self):
+        text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn("$installedAppDir = Join-Path $stateRoot 'app'", text)
+        self.assertIn("Get-Process -Name 'CodexBridgeLauncher'", text)
+        self.assertIn("$installedManager stop", text)
+        self.assertIn("$staleStandaloneBridge = Join-Path $installedAppDir 'codex_provider_bridge.exe'", text)
+        self.assertIn("Remove-Item -LiteralPath $staleStandaloneBridge -Force", text)
+
     def test_windows_manager_can_find_bootstrapped_private_python(self):
         text = (ROOT / "scripts" / "windows" / "codex_bridge_manager.ps1").read_text(
             encoding="utf-8-sig"

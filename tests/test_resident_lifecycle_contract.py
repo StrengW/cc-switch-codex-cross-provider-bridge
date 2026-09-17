@@ -93,11 +93,11 @@ def test_ccswitch_trigger_watcher_relaunches_full_launcher_after_explicit_exit()
     assert 'if (IsFullLauncherRunning()) continue;' in watcher
     assert 'LaunchFullLauncherFromWatcher(exePath);' in watcher
 
-def test_conversation_bridge_core_is_bit_for_bit_unchanged_from_v2151():
-    # v2.15.4 is intentionally a lifecycle-only patch. Do not touch the bridge
-    # replay / tool-history / reasoning / continuation code that passed stress tests.
+def test_conversation_bridge_core_matches_compatibility_firewall_baseline():
+    # The compatibility-firewall hotfix intentionally changes only guarded retry logic
+    # after an upstream 400/422; launcher/manager lifecycle behavior stays frozen.
     digest = _normalized_sha256(BRIDGE)
-    assert digest == "4e530f8945345c531c675d1043a676ecaddc268b6381b7c75f1afd1723d6963f"
+    assert digest == "688d015f785f99dcd3a937ea5d613756cebaf24558f73f6fa751ab0411f33cca"
 
 
 def test_exit_serializes_against_inflight_bridge_ensure_and_blocks_stale_restart():
@@ -113,11 +113,11 @@ def test_exit_serializes_against_inflight_bridge_ensure_and_blocks_stale_restart
     assert "Skipping Codex restart because Exit Everything is in progress" in restart
 
 
-def test_exit_race_patch_does_not_modify_manager_or_bridge_core():
+def test_exit_race_patch_does_not_modify_manager_or_bridge_firewall_baseline():
     manager_digest = _normalized_sha256(MANAGER)
     bridge_digest = _normalized_sha256(BRIDGE)
     assert manager_digest == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"
-    assert bridge_digest == "4e530f8945345c531c675d1043a676ecaddc268b6381b7c75f1afd1723d6963f"
+    assert bridge_digest == "688d015f785f99dcd3a937ea5d613756cebaf24558f73f6fa751ab0411f33cca"
 
 
 def test_exit_is_nonblocking_closes_tray_immediately_and_cancels_inflight_start():

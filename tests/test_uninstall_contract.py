@@ -78,5 +78,5 @@ def test_repo_contains_fallback_uninstall_cmd():
 
 
 def test_uninstall_feature_does_not_modify_bridge_or_manager_core():
-    assert _normalized_sha256(BRIDGE) == "4e530f8945345c531c675d1043a676ecaddc268b6381b7c75f1afd1723d6963f"
+    assert _normalized_sha256(BRIDGE) == "688d015f785f99dcd3a937ea5d613756cebaf24558f73f6fa751ab0411f33cca"
     assert _normalized_sha256(MANAGER) == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"

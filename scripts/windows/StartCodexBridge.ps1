@@ -104,6 +104,52 @@ New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
 $python = Ensure-PortablePython -StateRoot $stateRoot
 [Environment]::SetEnvironmentVariable('CPB_PYTHON', $python, 'Process')
 
+# Source quick-start is also an in-place updater for an existing installed copy.
+# A packaged install may have left codex_provider_bridge.exe in the stable app
+# directory. The manager intentionally prefers that EXE over the Python source,
+# so merely copying a newer codex_provider_bridge.py would silently keep running
+# the stale packaged Bridge. Stop the resident installed copy and remove only the
+# stale Bridge EXE before relaunching from this source tree.
+$installedAppDir = Join-Path $stateRoot 'app'
+if (Test-Path -LiteralPath $installedAppDir -PathType Container) {
+    Write-Host '[CodexBridge] Preparing installed copy for source update...' -ForegroundColor Cyan
+
+    # Stop installed launcher/tray/watcher processes first so the CC Switch
+    # trigger watcher cannot immediately race the Bridge stop and relaunch the
+    # old packaged runtime while this update is being applied.
+    Get-Process -Name 'CodexBridgeLauncher' -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $processPath = $_.Path
+            if (-not [string]::IsNullOrWhiteSpace($processPath)) {
+                $processDir = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($processPath))
+                if ([string]::Equals($processDir.TrimEnd('\\'), [IO.Path]::GetFullPath($installedAppDir).TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch { }
+    }
+    Start-Sleep -Milliseconds 300
+
+    $installedManager = Join-Path $installedAppDir 'codex_bridge_manager.ps1'
+    if (Test-Path -LiteralPath $installedManager -PathType Leaf) {
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installedManager stop | Out-Host
+        } catch {
+            Write-Warning "Could not stop the previous resident Bridge cleanly before source update: $($_.Exception.Message)"
+        }
+    }
+
+    $staleStandaloneBridge = Join-Path $installedAppDir 'codex_provider_bridge.exe'
+    if (Test-Path -LiteralPath $staleStandaloneBridge -PathType Leaf) {
+        try {
+            Remove-Item -LiteralPath $staleStandaloneBridge -Force
+            Write-Host '[CodexBridge] Removed stale packaged Bridge EXE so the updated source Bridge is selected.' -ForegroundColor DarkGray
+        } catch {
+            throw "Could not replace the installed Bridge runtime because the old standalone EXE is still locked: $($_.Exception.Message)"
+        }
+    }
+}
+
 $bridgeSource = Join-Path $ProjectRoot 'src\bridge\codex_provider_bridge.py'
 $managerSource = Join-Path $ProjectRoot 'scripts\windows\codex_bridge_manager.ps1'
 $uninstallerSource = Join-Path $ProjectRoot 'scripts\windows\UninstallCodexBridge.ps1'

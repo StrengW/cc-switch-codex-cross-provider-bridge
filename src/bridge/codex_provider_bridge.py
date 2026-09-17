@@ -253,6 +253,46 @@ PORTABILITY_ERROR_MARKERS = (
     b"expected an id that begins",
     b"array too long",
     b"previous_response_id",
+    b"no tool output found for tool call",
+    b"no tool call found for tool output",
+    b"tool output not found",
+    b"tool call not found",
+)
+
+# These terms are deliberately narrow.  A generic 400/422 must not trigger replay
+# rewriting merely because a model, account, quota, or authentication setting is invalid.
+# The compatibility firewall activates only when the upstream error names structured
+# Responses state that commonly becomes non-portable after switching providers.
+PORTABILITY_STATE_TERMS = (
+    b"encrypted_content",
+    b"encrypted content",
+    b"reasoning",
+    b"item_reference",
+    b"item reference",
+    b"compaction",
+    b"previous_response_id",
+    b"function_call",
+    b"function call",
+    b"function_call_output",
+    b"tool_call",
+    b"tool call",
+    b"tool_output",
+    b"tool output",
+    b"call_id",
+    b"computer_call",
+    b"web_search_call",
+)
+PORTABILITY_REJECTION_TERMS = (
+    b"unsupported",
+    b"not supported",
+    b"unknown",
+    b"invalid",
+    b"missing",
+    b"not found",
+    b"expected",
+    b"must be",
+    b"cannot",
+    b"could not",
 )
 
 
@@ -540,6 +580,30 @@ TOOL_OUTPUT_TYPES = {
     "function_call_output",
     "custom_tool_call_output",
     "computer_call_output",
+}
+
+# Provider-hosted tool state is not portable in the same way as a plain function
+# call/result pair.  It is removed only on a retry *after* the target provider has
+# already rejected the original request; normal successful traffic is untouched.
+PORTABLE_PROVIDER_OWNED_ITEM_TYPES = {
+    "reasoning",
+    "compaction",
+    "item_reference",
+    "web_search_call",
+    "web_search_call_output",
+    "computer_call",
+    "computer_call_output",
+}
+
+# Optional response-shaping fields that are safe to drop on the guarded compatibility
+# retry.  They do not carry the user's conversational text or tool results.
+PORTABLE_OPTIONAL_TOP_LEVEL_FIELDS = {
+    "reasoning",
+    "include",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "prompt_cache_breakpoint",
+    "prompt_cache_options",
 }
 
 def _portable_item_signature(item: object) -> bytes:
@@ -855,6 +919,43 @@ def _tool_link_id(item: dict[str, object]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def _prune_unpaired_tool_items(items: list[object]) -> tuple[list[object], int]:
+    """Drop only tool call/output records whose visible counterpart is absent.
+
+    Some provider adapters reject a portable full replay when Codex replays a tool call
+    whose output lived only in provider-side state (or vice versa).  Never invent a tool
+    result.  On the portability retry path, retain complete call/output pairs verbatim and
+    omit only dangling tool records so the remaining visible transcript is structurally
+    valid for a stateless provider.
+    """
+    call_ids: set[str] = set()
+    output_ids: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in TOOL_CALL_TYPES:
+            call_id = _tool_link_id(item)
+            if call_id:
+                call_ids.add(call_id)
+        elif item_type in TOOL_OUTPUT_TYPES:
+            call_id = _tool_link_id(item)
+            if call_id:
+                output_ids.add(call_id)
+
+    complete_ids = call_ids & output_ids
+    cleaned: list[object] = []
+    omitted = 0
+    for item in items:
+        if isinstance(item, dict) and item.get("type") in TOOL_CALL_TYPES | TOOL_OUTPUT_TYPES:
+            call_id = _tool_link_id(item)
+            if not call_id or call_id not in complete_ids:
+                omitted += 1
+                continue
+        cleaned.append(item)
+    return cleaned, omitted
 
 
 def compact_switch_replay_items(
@@ -2713,12 +2814,19 @@ def override_responses_model(
     return rewritten, original_model, True
 
 
-def make_portable_responses_payload(payload: object) -> tuple[object, int, int, bool]:
-    """Build a provider-neutral replay after a target rejects opaque state.
+def make_portable_responses_payload(
+    payload: object, *, error_body: bytes | None = None
+) -> tuple[object, int, int, bool]:
+    """Build a provider-neutral replay after a target rejects structured state.
 
-    Human/assistant messages and tool calls/results remain intact. Reasoning and
-    item-reference records are provider-owned continuation state, so the
-    fallback omits them instead of attempting to translate opaque contents.
+    This is a guarded compatibility path, not the normal request path.  Human/user and
+    assistant messages are preserved.  Complete plain function/custom-tool call+output
+    pairs are preserved verbatim apart from provider item ids.  Opaque provider state,
+    hosted-tool state, stale response ids, and incomplete tool chains are omitted rather
+    than guessed or fabricated.
+
+    ``error_body`` is accepted so future compatibility rules can remain tied to an
+    explicit upstream rejection instead of becoming unconditional request rewriting.
     """
     if not isinstance(payload, dict):
         return payload, 0, 0, False
@@ -2738,7 +2846,7 @@ def make_portable_responses_payload(payload: object) -> tuple[object, int, int, 
 
             item = dict(original)
             item_type = item.get("type")
-            if item_type in {"reasoning", "compaction", "item_reference"}:
+            if item_type in PORTABLE_PROVIDER_OWNED_ITEM_TYPES:
                 omitted_provider_items += 1
                 continue
 
@@ -2749,21 +2857,44 @@ def make_portable_responses_payload(payload: object) -> tuple[object, int, int, 
             # non-reasoning output item.
             item.pop("encrypted_content", None)
             portable_items.append(item)
+
+        # A visible call without its result (or result without its call) is not a
+        # complete stateless transcript.  Preserve complete portable pairs and drop
+        # only the dangling records.  Never synthesize a result.
+        portable_items, omitted_unpaired_tools = _prune_unpaired_tool_items(portable_items)
+        omitted_provider_items += omitted_unpaired_tools
         cleaned["input"] = portable_items
 
     if cleaned.get("previous_response_id") is not None:
         cleaned.pop("previous_response_id", None)
         previous_removed = True
+
+    # Response-shaping/provider-cache hints are optional and frequently differ across
+    # Responses-compatible adapters.  Remove them only on this post-rejection retry.
+    for field in PORTABLE_OPTIONAL_TOP_LEVEL_FIELDS:
+        cleaned.pop(field, None)
+
+    # A stateless full replay must not depend on state created by another provider.
     cleaned["store"] = False
     return cleaned, removed_item_ids, omitted_provider_items, previous_removed
 
 
 def is_portability_error(status: int, body: bytes) -> bool:
-    if status != 400:
+    """Recognize cross-provider Responses-state incompatibility conservatively.
+
+    Authentication, quota, model availability, and generic provider failures are *not*
+    portability errors.  A retry is allowed only for 400/422 responses that either match
+    one of the known historical failure signatures or explicitly reject structured
+    Responses state such as reasoning/tool/item-reference records.
+    """
+    if status not in {400, 422} or not body:
         return False
     lowered = body.lower()
-    return any(marker in lowered for marker in PORTABILITY_ERROR_MARKERS)
-
+    if any(marker in lowered for marker in PORTABILITY_ERROR_MARKERS):
+        return True
+    names_structured_state = any(term in lowered for term in PORTABILITY_STATE_TERMS)
+    explicit_rejection = any(term in lowered for term in PORTABILITY_REJECTION_TERMS)
+    return names_structured_state and explicit_rejection
 
 
 
@@ -5536,10 +5667,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                         response.read() if response.status in {400, 422} else b""
                     )
 
-                if response.status == 400 and is_portability_error(response.status, first_error):
+                if response.status in {400, 422} and is_portability_error(response.status, first_error):
+                    rejected_status = response.status
                     connection.close()
                     portable_payload, _, omitted_provider_items, _ = (
-                        make_portable_responses_payload(original_payload)
+                        make_portable_responses_payload(
+                            original_payload, error_body=first_error
+                        )
                     )
                     portable_body = json.dumps(
                         portable_payload,
@@ -5558,6 +5692,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     response = connection.getresponse()
                     portable_retry = True
                     http_continuation_plan_durable = False
+                    self.log_message(
+                        "Compatibility firewall activated after upstream HTTP %s; "
+                        "sent one provider-neutral stateless replay; omitted_provider_items=%s; retry_status=%s",
+                        rejected_status,
+                        omitted_provider_items,
+                        response.status,
+                    )
                 elif response.status in {400, 422}:
                     buffered_response = first_error
 
