@@ -1,0 +1,15 @@
+.build/
+
+dist/*
+!dist/.gitkeep
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+*.log
+*.bridge-backup-*
+
+.DS_Store
+Thumbs.db

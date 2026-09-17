@@ -1,0 +1,85 @@
+name: Windows CI / optional release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Windows CI dependencies
+        shell: powershell
+        run: python -m pip install --disable-pip-version-check pytest pyinstaller
+
+      - name: Run regression tests
+        shell: powershell
+        run: python -m pytest tests -v
+
+      - name: Build standalone Bridge runtime
+        shell: powershell
+        run: .\scripts\build\BuildStandaloneBridge.ps1 -ProjectRoot "$PWD"
+
+      - name: Build one-click Windows installer
+        shell: powershell
+        run: .\scripts\build\BuildCodexBridgeSetup.ps1 -ProjectRoot "$PWD"
+
+      - name: Smoke-test installer in a Unicode path
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'dist\CodexBridge-Setup.exe'
+          $root = Join-Path $env:RUNNER_TEMP 'CodexBridge Smoke 测试 with spaces'
+          Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          $quotedRoot = '"' + $root + '"'
+          $p = Start-Process -FilePath $setup -ArgumentList @('--silent','--no-launch','--no-autostart','--root',$quotedRoot) -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($p.ExitCode)" }
+          $app = Join-Path $root 'app'
+          foreach ($name in @('CodexBridgeLauncher.exe','codex_provider_bridge.exe','codex_bridge_manager.ps1')) {
+            $file = Join-Path $app $name
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Smoke install missing $name" }
+          }
+          & (Join-Path $app 'codex_provider_bridge.exe') --help *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone Bridge runtime failed to start.' }
+
+      - name: Generate SHA-256 checksum
+        shell: powershell
+        run: |
+          $file = 'dist\CodexBridge-Setup.exe'
+          $hash = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+          "$hash  CodexBridge-Setup.exe" | Set-Content -Encoding ascii 'dist\CodexBridge-Setup.exe.sha256'
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexBridge-Setup
+          path: |
+            dist/CodexBridge-Setup.exe
+            dist/CodexBridge-Setup.exe.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag "dist\CodexBridge-Setup.exe" "dist\CodexBridge-Setup.exe.sha256" --clobber
+          } else {
+            gh release create $tag "dist\CodexBridge-Setup.exe" "dist\CodexBridge-Setup.exe.sha256" --title "CodexBridge $tag" --generate-notes
+          }
