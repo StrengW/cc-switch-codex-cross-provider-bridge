@@ -17,8 +17,16 @@ A useful report includes:
 - minimal reproduction steps;
 - sanitized logs with secrets and personal paths removed.
 
+## Windows distribution policy
+
+The normal-user Windows Release asset is `CodexBridge-Windows.zip`. It intentionally contains **no prebuilt `.exe`**. `Start CodexBridge.cmd` prepares the user-local runtime and builds the small tray Launcher locally on the user's machine.
+
+The previous unsigned custom self-extracting Setup EXE / PyInstaller one-file distribution is not part of the normal Release workflow after it triggered a Microsoft Defender ML/heuristic detection during pre-release testing. Users should not disable Defender, turn off real-time protection, or add broad antivirus exclusions to run CodexBridge.
+
+Release SHA-256 files are provided for integrity verification. A checksum proves that the downloaded bytes match the published artifact; it is not a malware-safety certificate.
+
 ## Scope
 
-Security reports are especially useful for issues involving credential exposure, unintended network exposure, unsafe local-file writes, privilege escalation, or routing that sends requests to an unexpected upstream.
+Security reports are especially useful for issues involving credential exposure, unintended network exposure, unsafe local-file writes, privilege escalation, supply-chain or release-artifact integrity, unsafe persistence, or routing that sends requests to an unexpected upstream.
 
 CodexBridge is currently Beta and is not an officially supported OpenAI or CC Switch component.

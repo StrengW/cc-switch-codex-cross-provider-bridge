@@ -61,50 +61,85 @@ CodexBridge 的目标不是替代 CC Switch，也不是再做一个模型聚合�
 
 ## 安装（普通用户只看这里）
 
-### Windows 10/11：推荐安装包
+### 最简单的方式：直接下载 Release ZIP
 
-普通 Windows 用户推荐直接使用 GitHub Release 里的 **`CodexBridge-Setup.exe`**：
+大多数用户不需要克隆仓库，也不需要手动执行命令。打开项目 **Releases**，下载自己平台对应的 ZIP：
 
-1. 打开项目的 **Releases**；
-2. 下载 `CodexBridge-Setup.exe`；
-3. 双击运行；
-4. 安装完成后正常使用 CC Switch / Codex 即可。
+- **Windows 10/11 x64**：`CodexBridge-Windows.zip`
+- **macOS Apple Silicon（M1/M2/M3/M4…）**：`CodexBridge-macOS-AppleSilicon.zip`
+- **macOS Intel**：`CodexBridge-macOS-Intel.zip`
 
-安装包会自动把 CodexBridge 安装到当前用户目录、注册后台 watcher 和标准卸载入口，并启动 CodexBridge。**不需要管理员权限，也不需要手动安装 Python。**
+下载后解压，然后：
 
-同时会提供 `CodexBridge-Setup.exe.sha256`，用于校验下载文件。由于目前是未签名的开源构建，Windows SmartScreen 可能给出提示；确认文件来自本项目 Release 并核对 SHA-256 后再运行。
+```text
+Windows → 双击 Start CodexBridge.cmd
+macOS   → 双击 Start CodexBridge.command
+```
 
-### macOS：推荐使用 Release 包
+每个正式 Release ZIP 都会同时提供对应的 `.sha256` 文件用于校验下载完整性。
 
-macOS 用户优先从项目 **Releases** 下载与机器架构对应的包：
+### Windows 10/11：推荐 Release ZIP
 
-- Apple Silicon（M1/M2/M3/M4…）：`CodexBridge-macOS-AppleSilicon.zip`
-- Intel：`CodexBridge-macOS-Intel.zip`
+Windows 正式 Release 推荐使用 **`CodexBridge-Windows.zip`**：
 
-下载后解压，双击 **`Start CodexBridge.command`**。首次运行会自动准备用户级运行环境并注册 LaunchAgent。Release 同时提供对应的 `.sha256` 校验文件。
+1. 下载并解压 `CodexBridge-Windows.zip`；
+2. 双击 **`Start CodexBridge.cmd`**；
+3. 首次运行完成后，正常使用 CC Switch / Codex 即可。
 
-如果你不会用 Releases，也可以在仓库点击 **Code → Download ZIP**，解压后双击 **`Start CodexBridge.command`**。
+首次启动会自动准备用户级 Python runtime、在本机编译小型托盘 Launcher，并安装到 `%LOCALAPPDATA%\CodexProviderBridge`。**用户不需要手动安装 Python，也不需要管理员权限。** 后续仍由 Launcher 负责后台 watcher、切换检测和标准卸载入口。
 
 > [!IMPORTANT]
-> macOS 可能因为 Gatekeeper 对从浏览器下载的脚本给出安全提示。若双击被阻止，请在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次。
+> Windows 正式 Release **不再分发预编译 `CodexBridge-Setup.exe` 或 PyInstaller one-file Bridge**。此前的未签名自解压安装包在发布前测试中触发过 Microsoft Defender 的 ML/启发式检测，因此它已从普通用户发布路径中移除。不要为了运行 CodexBridge 关闭 Defender、关闭实时保护或给整个目录加白名单。
 
-### Windows 源码 ZIP 仍然保留
+`CodexBridge-Windows.zip` 本身不包含预编译 `.exe`；首次运行需要的 Launcher 会在用户自己的 Windows 机器上由系统 C# 编译器生成。Release 同时提供 SHA-256 校验文件。**SHA-256 只能证明文件一致性，不等于安全认证。**
 
-如果你不会用 Releases，直接在仓库点击 **Code → Download ZIP**，解压后双击 **`Start CodexBridge.cmd`** 即可。首次运行会自动完成所需的用户级安装/初始化并启动 CodexBridge。
+### macOS
+
+正式 tag 的 macOS Release 仍分别提供 Apple Silicon 与 Intel ZIP。GitHub Actions 会先对内置 Python runtime 中的 Mach-O 可执行代码执行 **Developer ID + Hardened Runtime + secure timestamp** 签名，再通过 Apple `notarytool` 提交公证；只有 Apple 返回 `Accepted` 后，tag Release 才允许发布对应资产。
+
+这意味着：
+
+- **GitHub Releases 中的正式 macOS ZIP**：必须经过 Developer ID 签名和 Apple notarization；
+- **手动 `workflow_dispatch` 生成的 Actions Artifact**：如果仓库没有配置 Apple 凭据，可以作为 CI/开发测试产物生成，但应视为 **unsigned CI artifact**，不是面向普通用户的正式发行包；
+- `.command` 本身仍是 shell 启动脚本，因此 macOS 第一次从浏览器下载后仍可能要求用户确认。若双击被 Gatekeeper 阻止，请在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次；不要关闭 Gatekeeper。
+
+维护者发布正式 macOS tag 前，需要在 GitHub Actions Secrets 中配置：
+
+```text
+MACOS_CERTIFICATE_P12_BASE64
+MACOS_CERTIFICATE_PASSWORD
+MACOS_SIGNING_IDENTITY
+APPLE_ID
+APPLE_TEAM_ID
+APPLE_APP_SPECIFIC_PASSWORD
+```
+
+缺少任意一项时，普通手动 CI 仍可运行，但 **tag 的 macOS Release 会主动失败而不是发布未签名包**。
+
+### 仓库源码 ZIP 仍然可用
+
+不使用 Releases 时，也可以在仓库点击 **Code → Download ZIP**。解压后：
+
+```text
+Windows → Start CodexBridge.cmd
+macOS   → Start CodexBridge.command
+```
+
+源码 ZIP 适合开发、审计或临时测试；普通用户优先使用 Releases 中的平台 ZIP。
 
 ### 用户实际操作路径
 
 ```text
 Windows:
-GitHub Release → CodexBridge-Setup.exe → 双击安装 → 正常使用 CC Switch / Codex
-或：Code → Download ZIP → Start CodexBridge.cmd → 自动安装/启动
+Releases → CodexBridge-Windows.zip → 解压 → Start CodexBridge.cmd
+→ 首次自动准备 runtime / 本机编译 Launcher → 正常使用 CC Switch / Codex
 
 macOS:
-GitHub Release → Apple Silicon / Intel 对应 ZIP → Start CodexBridge.command → 正常使用
-或：Code → Download ZIP → Start CodexBridge.command → 首次自动初始化
+Releases → Apple Silicon / Intel 对应 ZIP → 解压 → Start CodexBridge.command
+→ 正式 tag 资产已通过 Developer ID 签名 + Apple notarization
 ```
 
-GitHub Actions 会分别在 Windows 与 macOS runner 上构建并回归测试发布物；Release 会发布 Windows `CodexBridge-Setup.exe`、macOS Apple Silicon / Intel ZIP 以及对应的 SHA-256 校验文件。
+GitHub Actions 会分别在 Windows 与 macOS runner 上执行回归测试。Windows 正式 Release 不再上传旧的自解压 Setup EXE；macOS 正式 tag Release 则要求签名与 Apple notarization 成功后才能发布。
 
 ## 装完以后会发生什么？
 
@@ -144,6 +179,21 @@ Provider 切换由 Bridge 内部路由和 provider-scoped catalog 表示，而�
 - 返回同一个 Provider 时，优先只发送该 Provider 尚未看到的 conversation delta。
 
 这可以减少“切回来又完整重放”的成本，但 **不能保证服务商账单中的 cached tokens 一定命中**。
+
+### 🧯 Third-party Compatibility Firewall
+
+跨 Provider 的历史不只包含文本，还可能包含 tool call/output、reasoning、item reference、encrypted content 和 Provider 私有状态。CodexBridge 现在对第三方 Responses 路由增加了一个**失败后才触发**的兼容防火墙：
+
+```text
+正常请求 → 成功：完全保持原路径
+        ↓ 400 / 422 且明确属于跨 Provider 状态不兼容
+安全 portable replay：清除不可移植 Provider 状态并修复 tool 配对
+        ↓
+成功：继续原对话
+失败：返回真实上游错误，不伪造 tool output，也不改写本地会话历史
+```
+
+完整的 tool call + output 会保留；孤立 tool call / orphan output、不可移植 reasoning/item reference/compaction/encrypted state 会在 fallback replay 中被保守移除。认证失败、rate limit、模型不存在、普通 5xx 或 `RESPONSES_MODEL_NOT_SUPPORTED` 不会被错误吞掉或当成历史兼容问题重试。
 
 ### 🧩 Provider-scoped 模型列表
 
@@ -224,27 +274,26 @@ CodexBridge 能控制的是“是否再次发送整段历史”和“是否复�
 
 ## 支持范围
 
-当前普通用户目标是 **Windows 10/11 + macOS Intel + macOS Apple Silicon**。Windows 以 Release 中的 `CodexBridge-Setup.exe` 为推荐安装路径；macOS 以 Release 中与架构对应的 Apple Silicon / Intel ZIP 为推荐路径，仓库源码 ZIP 保留为备用方式。
+当前普通用户目标是 **Windows 10/11 x64 + macOS Intel + macOS Apple Silicon**。Windows 推荐使用 Release 中的 `CodexBridge-Windows.zip`；macOS 使用与架构对应的 Apple Silicon / Intel ZIP。
 
 | 路线 / 平台 | 状态 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 x64 | ✅ 主路径 | Release 中的 `CodexBridge-Setup.exe`；源码 ZIP 的 `.cmd` 仍作为备用/开发路径 |
-| Windows ARM64 | 🟡 兼容路径 | 源码 ZIP bootstrap 可选择 ARM64 Python embeddable 包；正式 Setup 仍建议单独真机回归 |
-| macOS Apple Silicon | ✅ Release 路径 | Release 中的 Apple Silicon ZIP；`.command` + 用户级 runtime + LaunchAgent watcher |
-| macOS Intel | ✅ Release 路径 | Release 中的 Intel ZIP；与 Apple Silicon 相同的启动与 watcher 逻辑 |
-| OpenAI Official | ✅ 主要测试路径 | Bridge 直接连接 ChatGPT Codex backend |
-| GLM | ✅ 主要测试路径 | 经 CC Switch Responses 路由 |
-| DeepSeek | 🟡 已用于开发测试 | 取决于 CC Switch 当前协议映射 |
-| Qwen / MiniMax | 🟡 兼容目标 | 取决于 CC Switch 对对应 Provider/协议的支持 |
-| Claude / Gemini 等 | 🟡 条件支持 | CodexBridge 不是协议转换器；需要 CC Switch 能处理该上游协议 |
-| Linux / WSL | 🧪 开发路径 | Bash manager 仍保留，但当前不作为普通用户一键路径 |
+| Windows 10/11 x64 | ✅ 主路径 | Release `CodexBridge-Windows.zip` → 解压 → `Start CodexBridge.cmd`；无预编译 EXE，首次本机初始化 |
+| Windows ARM64 | 🟡 兼容路径 | 源码 bootstrap 能选择 ARM64 Python embeddable runtime，但仍建议单独真机回归 |
+| macOS Apple Silicon | 🟡 CI 验证 + 安全发布门槛 | 双架构 CI 已覆盖；正式 tag 只有在 Developer ID 签名 + Apple notarization 成功后才发布 |
+| macOS Intel | 🟡 CI 验证 + 安全发布门槛 | 与 Apple Silicon 相同；当前缺少真机回归时，不把 CI 通过等同于普通用户零阻碍验证 |
+| OpenAI Official | ✅ 已回归 | Bridge 直接连接 ChatGPT Codex backend |
+| GLM | ✅ 已回归 | 经 CC Switch Responses 路由；已覆盖跨 Provider 长历史/工具工作流 |
+| DeepSeek | ✅ 已回归 | 已覆盖包含 tool history 的跨 Provider fallback / compatibility firewall |
+| Qwen | ✅ 已回归 | 已覆盖同会话 Official ↔ third-party 切换与工具历史 |
+| MiniMax / Claude / Gemini 等 | 🟡 Best effort | 只有在 CC Switch / 上游提供 Codex 所需的 Responses 语义时才可能工作；不承诺任意模型 100% 兼容 |
+| Linux / WSL | 🧪 开发路径 | Bash manager 保留，但当前不是普通用户一键主路径 |
 
 > [!NOTE]
-> “任何电脑”在这里指：支持范围内，不依赖固定用户名、盘符或安装目录。Windows 普通用户只需要下载 Release 安装包；macOS 普通用户优先下载 Release 中与架构对应的 ZIP。两者都不需要进入 Actions 或手动配置 Python。企业组策略、杀毒软件、SmartScreen/Gatekeeper、网络限制、损坏的 CC Switch/Codex 安装或未来上游 API 变化仍可能阻止运行。
+> “已回归”表示当前测试组合通过，不代表未来任意 Codex、CC Switch、Provider 版本都不会变化。CodexBridge 的产品级保护目标是：能兼容就继续；能安全降级就 portable replay；仍不支持时明确失败，避免污染已有会话状态。
 
 > [!WARNING]
 > CodexBridge **不是 Anthropic / Gemini / Chat Completions ↔ Responses 的通用协议转换器**。协议适配仍由 CC Switch 或上游兼容层负责。
-
 ## 项目状态
 
 当前为 **Beta**。
@@ -258,7 +307,8 @@ CodexBridge 能控制的是“是否再次发送整段历史”和“是否复�
 - CC Switch proxy 自动恢复；
 - `model_provider = custom` 的稳定身份；
 - 常驻 Bridge 生命周期与关闭 CC Switch 后的代理恢复；
-- Windows `CodexBridge-Setup.exe` 一键安装与 Release 构建。
+- Windows 无预编译 EXE 的 Release ZIP / 本机 bootstrap 发布路径；
+- third-party compatibility firewall（tool/reasoning/item state 安全 fallback）。
 
 仍需要持续回归的区域包括上游版本升级、新 Provider、Realtime/Voice、复杂 tool item、新 reasoning item shape，以及不同第三方对 durable continuation 的实现差异。
 
@@ -302,7 +352,7 @@ CodexBridge 能控制的是“是否再次发送整段历史”和“是否复�
 <details>
 <summary><strong>普通用户需要 Python 吗？</strong></summary>
 
-Windows 安装包不需要用户手动安装 Python；Release 构建会把 standalone Bridge runtime 一起打包。源码 ZIP 的备用启动路径仍会在需要时自动准备用户级 Python runtime。
+不需要手动安装。Windows Release ZIP 与仓库 ZIP 都会在首次运行时自动准备用户级 Python runtime；正式 Windows 下载包本身不再携带 PyInstaller standalone EXE。
 
 </details>
 
@@ -360,13 +410,13 @@ Bridge → :15721 CC Switch → Provider
 
 ## 从源码运行 / 开发
 
-Windows 普通用户优先使用 Release 中的 `CodexBridge-Setup.exe`；macOS 普通用户优先使用 Release 中与架构对应的 ZIP。仓库源码 ZIP 仍保留为备用路径。下面的源码结构主要面向维护者：
+Windows 普通用户优先使用 Release 中的 `CodexBridge-Windows.zip`；macOS 普通用户优先使用与架构对应的 ZIP。下面的源码结构主要面向维护者：
 
 ```text
 src/
   bridge/       Python bridge core
   launcher/     Windows tray launcher / watcher
-  setup/        one-click installer
+  setup/        legacy/experimental installer source（当前不作为正式 Windows Release 资产）
 scripts/
   build/        Windows release build scripts
   windows/      PowerShell manager
@@ -376,7 +426,7 @@ docs/           architecture notes
 .github/        CI / Release workflow
 ```
 
-GitHub Actions 在 Windows / macOS runner 上执行回归和打包测试。普通用户只需从 Release 下载对应平台的发布物，不需要进入 Actions。
+GitHub Actions 在 Windows / macOS runner 上执行回归和打包测试。Windows workflow 还会检查正式 ZIP 中不存在预编译 `.exe`，并在包含中文与空格的路径里验证 Launcher 能本机编译。普通用户只需从 Release 下载对应平台的发布物。
 
 本地开发构建入口见 `scripts/build/`。
 
@@ -387,7 +437,9 @@ GitHub Actions 在 Windows / macOS runner 上执行回归和打包测试。普�
 - Bridge 默认只监听 `127.0.0.1`，不要把它暴露到 `0.0.0.0` 或公网；
 - 不要把包含个人路径、Provider 配置或其他敏感信息的完整日志直接公开；
 - 项目不会通过“修改 session 文件”来迁移历史；
-- 这是非官方兼容层，请在重要工作流中自行保留 Codex 配置与项目数据备份。
+- 这是非官方兼容层，请在重要工作流中自行保留 Codex 配置与项目数据备份；
+- Windows 正式 Release ZIP 不分发预编译 EXE；不要通过“关闭 Defender / 加整目录白名单”解决安全告警；
+- SHA-256 用于验证发布物一致性，但不是恶意软件安全证明；
 - 安全问题请优先按 [SECURITY.md](SECURITY.md) 的方式报告，不要在公开 Issue 中粘贴 token、API key 或未脱敏日志。
 
 ## Roadmap
@@ -403,7 +455,8 @@ GitHub Actions 在 Windows / macOS runner 上执行回归和打包测试。普�
 - [x] GitHub Actions 跨平台 CI
 - [ ] 更完整的多 Provider / 多 Codex 版本回归矩阵
 - [x] Windows 标准卸载入口（托盘 / 已安装的应用 / 卸载脚本）
-- [x] Windows `CodexBridge-Setup.exe` 正式安装包 / Release 资产
+- [x] Windows `CodexBridge-Windows.zip` 无预编译 EXE 的普通用户 Release 路径
+- [ ] 完成代码签名后重新评估标准 MSI / 签名安装器
 - [ ] macOS `.dmg` / `.pkg` 与更完整的跨平台安装/更新体验
 - [ ] Portable handoff / lazy replay，降低首次进入新 Provider 的完整上下文成本
 - [ ] 上游 CC Switch lifecycle hook / companion integration

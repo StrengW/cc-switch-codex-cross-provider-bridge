@@ -64,11 +64,21 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('endswith(\\\"-${TARGET}-install_only_stripped.tar.gz\\\")', text)
         self.assertNotIn('assets[].browser_download_url | select(test(', text)
 
-    def test_macos_release_publish_tolerates_matrix_creation_race(self):
+    def test_tagged_macos_release_requires_signing_and_notarization(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
-        self.assertIn('gh release create "$tag" --title "CodexBridge $tag" --generate-notes >/dev/null 2>&1 || true', text)
-        self.assertIn('for attempt in 1 2 3 4 5; do', text)
-        self.assertIn('gh release upload "$tag" "dist/$ASSET" "dist/$ASSET.sha256" --clobber', text)
+        self.assertIn("A tagged macOS Release requires Developer ID signing and Apple notarization credentials", text)
+        self.assertIn("--options runtime", text)
+        self.assertIn("--timestamp", text)
+        self.assertIn("xcrun notarytool submit", text)
+        self.assertIn("Apple notarization did not return Accepted", text)
+
+    def test_macos_build_job_is_read_only_and_release_job_gets_write_permission(self):
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        self.assertIn("permissions:\n  contents: read", text)
+        self.assertIn("release:\n    if: startsWith(github.ref, 'refs/tags/')", text)
+        self.assertIn("contents: write", text)
+        self.assertIn("pattern: CodexBridge-macOS-*", text)
+        self.assertIn("merge-multiple: true", text)
 
     def test_macos_watcher_automates_provider_switch_restart_policy(self):
         text = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")

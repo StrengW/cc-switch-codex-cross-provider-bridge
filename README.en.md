@@ -62,49 +62,85 @@ CodexBridge does not replace CC Switch and is not another model aggregator. It a
 
 ## Installation (normal users only need this)
 
-### Windows 10/11: use the installer
+### Easiest path: download the Release ZIP
 
-For normal Windows users, the recommended path is the GitHub Release asset **`CodexBridge-Setup.exe`**:
+Most users do not need to clone the repository or run commands manually. Open **Releases** and download the ZIP for your platform:
 
-1. Open the project's **Releases** page.
-2. Download `CodexBridge-Setup.exe`.
-3. Double-click it.
-4. After setup completes, use CC Switch / Codex normally.
+- **Windows 10/11 x64**: `CodexBridge-Windows.zip`
+- **macOS Apple Silicon (M1/M2/M3/M4...)**: `CodexBridge-macOS-AppleSilicon.zip`
+- **macOS Intel**: `CodexBridge-macOS-Intel.zip`
 
-The installer puts CodexBridge under the current user's application-data directory, registers the background watcher and standard uninstall entry, and starts CodexBridge. **No administrator rights and no manual Python installation are required.**
+Extract it, then double-click:
 
-Each release also includes `CodexBridge-Setup.exe.sha256` for verification. The current open-source build is unsigned, so Windows SmartScreen may warn. Verify that the file came from this project's Release and compare its SHA-256 before running it.
+```text
+Windows → Start CodexBridge.cmd
+macOS   → Start CodexBridge.command
+```
 
-### macOS: use the Release package
+Each formal Release ZIP is published with a matching `.sha256` file for download-integrity verification.
 
-For macOS, prefer the matching asset from the project **Releases** page:
+### Windows 10/11: use the Release ZIP
 
-- Apple Silicon (M1/M2/M3/M4…): `CodexBridge-macOS-AppleSilicon.zip`
-- Intel: `CodexBridge-macOS-Intel.zip`
+Use **`CodexBridge-Windows.zip`** from Releases:
 
-Extract the archive and double-click **`Start CodexBridge.command`**. The first run prepares the user-local runtime and registers the LaunchAgent automatically. Each Release also includes the matching `.sha256` checksum file.
+1. Download and extract `CodexBridge-Windows.zip`;
+2. double-click **`Start CodexBridge.cmd`**;
+3. after first-run setup completes, use CC Switch / Codex normally.
 
-If you do not use GitHub Releases, **Code → Download ZIP** is still supported; extract the repository ZIP and double-click **`Start CodexBridge.command`**.
+First run prepares a user-local Python runtime, compiles the small tray Launcher locally, and installs CodexBridge under `%LOCALAPPDATA%\CodexProviderBridge`. **No manual Python installation and no administrator privileges are required.** The Launcher then owns the watcher, switch detection, and normal uninstall entry points.
 
 > [!IMPORTANT]
-> macOS Gatekeeper can warn about scripts downloaded from a browser. If a normal double-click is blocked, Finder **right-click → Open** `Start CodexBridge.command` once.
+> The normal Windows Release **does not distribute a prebuilt `CodexBridge-Setup.exe` or a PyInstaller one-file Bridge**. An earlier unsigned self-extracting installer triggered a Microsoft Defender ML/heuristic detection during pre-release testing, so it was removed from the normal-user distribution path. Do not disable Defender, disable real-time protection, or whitelist an entire directory just to run CodexBridge.
 
-### Windows repository ZIP is still supported
+`CodexBridge-Windows.zip` itself contains no prebuilt `.exe`; the Launcher is compiled locally on the user's Windows machine. A SHA-256 file is published alongside the archive. **A matching SHA-256 proves file identity, not security certification.**
 
-If you do not use GitHub Releases, choose **Code → Download ZIP**, extract it, and double-click **`Start CodexBridge.cmd`**. On the first run it automatically performs the required user-local setup/initialization and starts CodexBridge.
+### macOS
 
-### Actual user path
+Formal tagged macOS Releases continue to publish separate Apple Silicon and Intel ZIPs. GitHub Actions signs the bundled Python runtime's Mach-O executable code with **Developer ID + Hardened Runtime + secure timestamp**, then submits the archive through Apple's `notarytool`; the tagged Release asset is allowed to publish only after Apple returns `Accepted`.
+
+Therefore:
+
+- **formal macOS ZIPs in GitHub Releases** must pass Developer ID signing and Apple notarization;
+- a manual `workflow_dispatch` can still produce an Actions artifact without Apple credentials for CI/developer testing, but that artifact is an **unsigned CI artifact**, not the normal-user release;
+- `Start CodexBridge.command` is still a shell entry point, so macOS may ask for first-run approval after a browser download. If Gatekeeper blocks the first double-click, use Finder **Right-click → Open** once. Do not disable Gatekeeper.
+
+Maintainers must configure these GitHub Actions Secrets before publishing a formal macOS tag:
+
+```text
+MACOS_CERTIFICATE_P12_BASE64
+MACOS_CERTIFICATE_PASSWORD
+MACOS_SIGNING_IDENTITY
+APPLE_ID
+APPLE_TEAM_ID
+APPLE_APP_SPECIFIC_PASSWORD
+```
+
+If any are missing, normal manual CI can still run, but a **tagged macOS Release fails closed instead of publishing an unsigned package**.
+
+### Repository source ZIP is still supported
+
+If you do not use Releases, choose **Code → Download ZIP** on the repository. After extraction:
+
+```text
+Windows → Start CodexBridge.cmd
+macOS   → Start CodexBridge.command
+```
+
+The repository ZIP is useful for development, auditing, or temporary testing; normal users should prefer the platform ZIP from Releases.
+
+### Normal-user path
 
 ```text
 Windows:
-GitHub Release → CodexBridge-Setup.exe → install → use CC Switch / Codex normally
-or: Code → Download ZIP → Start CodexBridge.cmd → automatic install/start
+Releases → CodexBridge-Windows.zip → extract → Start CodexBridge.cmd
+→ first-run runtime setup / local Launcher compile → use CC Switch / Codex normally
 
 macOS:
-Download ZIP → Start CodexBridge.command → automatic first-run setup → normal use
+Releases → Apple Silicon / Intel ZIP → extract → Start CodexBridge.command
+→ formal tagged assets have passed Developer ID signing + Apple notarization
 ```
 
-GitHub Actions builds and smoke-tests `CodexBridge-Setup.exe` on a Windows runner, and Releases publish both the installer and its SHA-256 checksum.
+GitHub Actions runs regression tests on Windows and macOS runners. The Windows Release no longer uploads the legacy self-extracting Setup EXE; tagged macOS Releases publish only after signing and Apple notarization succeed.
 
 ## What happens after installation?
 
@@ -144,6 +180,21 @@ Different providers cannot read each other's internal prompt/KV cache. CodexBrid
 - on return to a provider, CodexBridge prefers sending only the conversation delta that provider has not seen when the safety guards pass.
 
 This can reduce full-history replay, but it **cannot force a provider's billing system to report a prompt-cache hit**.
+
+### 🧯 Third-party Compatibility Firewall
+
+Cross-provider history can contain more than text: tool calls/outputs, reasoning items, item references, encrypted content, and provider-private state can all become invalid on a different backend. CodexBridge now adds a **failure-triggered only** compatibility firewall for third-party Responses routes:
+
+```text
+normal request → success: keep the existing path unchanged
+             ↓ 400 / 422 clearly caused by cross-provider state incompatibility
+safe portable replay: remove non-portable provider state and repair tool pairing
+             ↓
+success: continue the same conversation
+failure: return the real upstream error; never forge tool output or rewrite saved history
+```
+
+Complete tool call/output pairs are preserved. Dangling tool calls, orphan outputs, and non-portable reasoning/item-reference/compaction/encrypted state are conservatively removed only in the fallback replay. Authentication errors, rate limits, missing models, ordinary 5xx failures, and `RESPONSES_MODEL_NOT_SUPPORTED` are not silently reclassified as history-compatibility errors.
 
 ### 🧩 Provider-scoped model picker
 
@@ -224,27 +275,26 @@ Therefore:
 
 ## Compatibility
 
-The normal-user target is **Windows 10/11 + macOS Intel + macOS Apple Silicon**. Windows uses `CodexBridge-Setup.exe` from Releases as the recommended install path; macOS uses the architecture-matched Apple Silicon / Intel Release ZIP as the recommended path, with the repository source ZIP retained as a fallback.
+The normal-user target is **Windows 10/11 x64 + macOS Intel + macOS Apple Silicon**. Windows uses `CodexBridge-Windows.zip` from Releases; macOS uses the architecture-matched Apple Silicon / Intel ZIP.
 
 | Route / platform | Status | Notes |
 | --- | --- | --- |
-| Windows 10/11 x64 | ✅ Primary | `CodexBridge-Setup.exe` from Releases; repository `.cmd` remains a fallback/developer path |
-| Windows ARM64 | 🟡 Compatibility path | Repository bootstrap can select the ARM64 embeddable Python package; the formal Setup path still needs additional real-device regression |
-| macOS Apple Silicon | ✅ Release path | Apple Silicon ZIP from Releases; `.command` + user-local runtime + LaunchAgent watcher |
-| macOS Intel | ✅ Release path | Intel ZIP from Releases; same launcher and watcher lifecycle as Apple Silicon |
-| OpenAI Official | ✅ Primary tested path | Bridge connects directly to the ChatGPT Codex backend |
-| GLM | ✅ Primary tested path | Routed through CC Switch Responses path |
-| DeepSeek | 🟡 Used during development | Depends on current CC Switch protocol mapping |
-| Qwen / MiniMax | 🟡 Compatibility target | Depends on CC Switch support for the selected provider/protocol |
-| Claude / Gemini etc. | 🟡 Conditional | CodexBridge is not a protocol converter |
-| Linux / WSL | 🧪 Developer path | Bash manager remains available, but is not the current normal-user one-click path |
+| Windows 10/11 x64 | ✅ Primary | Release `CodexBridge-Windows.zip` → extract → `Start CodexBridge.cmd`; no prebuilt EXE in the download, first-run setup happens locally |
+| Windows ARM64 | 🟡 Compatibility path | Source bootstrap can select the ARM64 embeddable Python runtime, but additional real-device regression is still recommended |
+| macOS Apple Silicon | 🟡 CI-validated + release gate | Dual-arch CI is covered; tagged assets publish only after Developer ID signing + Apple notarization succeed |
+| macOS Intel | 🟡 CI-validated + release gate | Same as Apple Silicon; without physical-Mac regression, CI success is not presented as frictionless end-user validation |
+| OpenAI Official | ✅ Regression-tested | Bridge connects directly to the ChatGPT Codex backend |
+| GLM | ✅ Regression-tested | CC Switch Responses route; cross-provider long-history/tool workflows covered |
+| DeepSeek | ✅ Regression-tested | Tool-bearing cross-provider fallback / compatibility firewall covered |
+| Qwen | ✅ Regression-tested | Same-conversation Official ↔ third-party switching with tool history covered |
+| MiniMax / Claude / Gemini etc. | 🟡 Best effort | Works only when CC Switch / the upstream exposes the Responses semantics Codex needs; arbitrary models are not promised to be 100% compatible |
+| Linux / WSL | 🧪 Developer path | Bash manager remains available, but is not the normal-user one-click path |
 
 > [!NOTE]
-> “Any computer” here means no fixed username, drive letter, or install directory within the supported platforms. Normal Windows users download the Release installer; normal macOS users download the architecture-matched Release ZIP. Neither path requires opening Actions or manually installing Python. Enterprise policy, antivirus, SmartScreen/Gatekeeper, network restrictions, broken CC Switch/Codex installs, or future upstream changes can still block execution.
+> “Regression-tested” means the current tested combination passed; it is not a promise that every future Codex, CC Switch, or provider version will remain identical. The product-level safety goal is: continue when compatible, use a safe portable replay when possible, and fail clearly without contaminating saved conversation state when the upstream still cannot support the request.
 
 > [!WARNING]
 > CodexBridge is **not** a generic Anthropic / Gemini / Chat Completions ↔ Responses protocol converter. Protocol adaptation remains the responsibility of CC Switch or another upstream compatibility layer.
-
 ## Project status
 
 Current status: **Beta**.
@@ -258,7 +308,8 @@ The project currently focuses on:
 - automatic CC Switch proxy recovery;
 - stable `model_provider = custom` identity;
 - explicit full shutdown without rewriting Codex routing or restarting Codex;
-- `CodexBridge-Setup.exe` one-click Windows installation and Release builds.
+- Windows Release ZIP / local-bootstrap distribution with no prebuilt EXE in the download;
+- third-party compatibility firewall for safe tool/reasoning/item-state fallback.
 
 Areas that still need continuous regression testing include new Codex/CC Switch versions, additional providers, Realtime/Voice, complex tool items, new reasoning item shapes, and provider-specific durable-continuation behavior.
 
@@ -302,7 +353,7 @@ GLM does not inherit OpenAI's internal cache. The optimization target is the ret
 <details>
 <summary><strong>Do normal users need Python?</strong></summary>
 
-The Windows installer does not require users to install Python manually; Release builds bundle the standalone Bridge runtime. The repository-ZIP fallback path still prepares a user-local Python runtime automatically when needed.
+No manual Python installation is required. Both the Windows Release ZIP and the repository ZIP prepare a user-local Python runtime automatically on first run; the formal Windows download no longer ships a PyInstaller standalone EXE.
 
 </details>
 
@@ -354,13 +405,13 @@ If the error points to `127.0.0.1:15722`, Codex still points at the Bridge but t
 
 ## Source layout / development
 
-Normal Windows users should use `CodexBridge-Setup.exe` from Releases, while normal macOS users should use the architecture-matched Release ZIP. The repository source ZIP remains a fallback. The source layout below is mainly for contributors:
+Normal Windows users should use `CodexBridge-Windows.zip` from Releases, while normal macOS users should use the architecture-matched Release ZIP. The source layout below is mainly for contributors:
 
 ```text
 src/
   bridge/       Python bridge core
   launcher/     Windows tray launcher / watcher
-  setup/        one-click installer
+  setup/        legacy/experimental installer source (not a normal Windows Release asset)
 scripts/
   build/        Windows release build scripts
   windows/      PowerShell manager
@@ -370,7 +421,7 @@ docs/           architecture notes
 .github/        CI / Release workflow
 ```
 
-GitHub Actions run Windows/macOS regression and packaging jobs. Normal users only need the matching platform asset from Releases and do not need to open Actions.
+GitHub Actions run Windows/macOS regression and packaging jobs. The Windows workflow also verifies that the formal ZIP contains no prebuilt `.exe` and that the Launcher can be compiled locally from a Unicode/space-containing path. Normal users only need the matching Release asset.
 
 See `scripts/build/` for local development builds.
 
@@ -382,6 +433,8 @@ See `scripts/build/` for local development builds.
 - Do not publish full logs without reviewing personal paths and provider-related information.
 - The project does not migrate history by rewriting saved session files.
 - This is an unofficial compatibility layer; keep normal backups of important Codex configuration and project data.
+- The formal Windows Release ZIP does not distribute prebuilt EXEs; do not work around security warnings by disabling Defender or broadly excluding the install directory.
+- SHA-256 verifies release-file integrity; it is not a malware-safety certificate.
 - Report security-sensitive issues according to [SECURITY.md](SECURITY.md); do not paste tokens, API keys, or unredacted logs into public Issues.
 
 ## Roadmap
@@ -397,7 +450,8 @@ See `scripts/build/` for local development builds.
 - [x] GitHub Actions cross-platform CI
 - [ ] Broader provider / Codex-version regression matrix
 - [x] Standard Windows uninstall entry (tray / Installed apps / uninstall script)
-- [x] Formal Windows `CodexBridge-Setup.exe` Release installer
+- [x] Windows `CodexBridge-Windows.zip` normal-user Release path with no prebuilt EXE in the download
+- [ ] Re-evaluate a standard MSI / signed installer after code signing is available
 - [ ] macOS `.dmg` / `.pkg` and a cleaner cross-platform install / update lifecycle
 - [ ] Portable handoff / lazy replay for reducing first-visit context cost
 - [ ] Upstream CC Switch lifecycle hook / companion integration

@@ -1,4 +1,4 @@
-name: macOS CI / optional release build
+name: macOS CI / signed optional release build
 
 on:
   workflow_dispatch:
@@ -7,10 +7,12 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +29,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Normalize macOS executable permissions
         run: |
@@ -41,11 +45,48 @@ jobs:
       - name: Create isolated macOS CI test environment
         run: |
           python3 -m venv "$RUNNER_TEMP/codexbridge-ci-venv"
-          "$RUNNER_TEMP/codexbridge-ci-venv/bin/python" -m pip install --disable-pip-version-check pytest
+          "$RUNNER_TEMP/codexbridge-ci-venv/bin/python" -m pip install --disable-pip-version-check pytest==9.0.2
 
       - name: Run regression tests
         run: |
           "$RUNNER_TEMP/codexbridge-ci-venv/bin/python" -m pytest tests -v
+
+      - name: Check Apple signing configuration
+        id: apple-signing
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          available=true
+          for value in \
+            "$MACOS_CERTIFICATE_P12_BASE64" \
+            "$MACOS_CERTIFICATE_PASSWORD" \
+            "$MACOS_SIGNING_IDENTITY" \
+            "$APPLE_ID" \
+            "$APPLE_TEAM_ID" \
+            "$APPLE_APP_SPECIFIC_PASSWORD"; do
+            if [[ -z "$value" ]]; then
+              available=false
+            fi
+          done
+
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+
+          if [[ "$GITHUB_REF" == refs/tags/* && "$available" != "true" ]]; then
+            echo "::error::A tagged macOS Release requires Developer ID signing and Apple notarization credentials. Configure the documented repository secrets before publishing a tag."
+            exit 1
+          fi
+
+          if [[ "$available" == "true" ]]; then
+            echo "Apple signing/notarization credentials are available."
+          else
+            echo "::notice::Apple signing credentials are not configured. workflow_dispatch will produce an unsigned CI artifact only; tagged Releases are blocked."
+          fi
 
       - name: Assemble self-contained portable macOS package
         env:
@@ -56,8 +97,7 @@ jobs:
           set -euo pipefail
           stage_parent="$RUNNER_TEMP/CodexBridge Portable 测试 with spaces"
           stage="$stage_parent/CodexBridge"
-          verify="$RUNNER_TEMP/CodexBridge Archive Verify"
-          rm -rf "$stage_parent" "$verify"
+          rm -rf "$stage_parent"
           mkdir -p "$stage/scripts/unix" "$stage/src/bridge" "$stage/runtime" dist
 
           cp "Start CodexBridge.command" "$stage/"
@@ -70,7 +110,7 @@ jobs:
           # Resolve the runtime by asset *name*, not browser_download_url.
           # GitHub percent-encodes the '+' in browser_download_url as %2B, so URL regex
           # matching incorrectly reported that valid macOS Python assets did not exist.
-          # Query the latest release's paginated asset endpoint so all ~800 assets are visible.
+          # Query the latest release's paginated asset endpoint so all assets are visible.
           release_id="$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq '.id')"
           asset_jq=".[] | select((.name | startswith(\"cpython-3.12.\")) and (.name | endswith(\"-${TARGET}-install_only_stripped.tar.gz\"))) | .browser_download_url"
           url="$(gh api --paginate "repos/astral-sh/python-build-standalone/releases/${release_id}/assets?per_page=100" --jq "$asset_jq" | sed -n '1p')"
@@ -97,6 +137,73 @@ jobs:
           bash -n "$stage/Start CodexBridge.command"
 
           echo "${{ github.ref_name }} / ${{ matrix.arch }}" > "$stage/BUILD.txt"
+
+      - name: Import Developer ID certificate
+        if: steps.apple-signing.outputs.available == 'true'
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/codexbridge-signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          certificate="$RUNNER_TEMP/codexbridge-developer-id.p12"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          rm -f "$certificate"
+
+          echo "CODEXBRIDGE_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Sign bundled macOS executable code
+        if: steps.apple-signing.outputs.available == 'true'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/CodexBridge Portable 测试 with spaces/CodexBridge"
+          signed=0
+
+          while IFS= read -r -d '' candidate; do
+            if /usr/bin/file -b "$candidate" | grep -q 'Mach-O'; then
+              /usr/bin/codesign \
+                --force \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --keychain "$CODEXBRIDGE_SIGNING_KEYCHAIN" \
+                --options runtime \
+                --timestamp \
+                "$candidate"
+              signed=$((signed + 1))
+            fi
+          done < <(find "$stage/runtime/python" -type f -print0)
+
+          if [[ "$signed" -eq 0 ]]; then
+            echo "::error::No Mach-O files were found in the bundled Python runtime."
+            exit 1
+          fi
+
+          while IFS= read -r -d '' candidate; do
+            if /usr/bin/file -b "$candidate" | grep -q 'Mach-O'; then
+              /usr/bin/codesign --verify --strict --verbose=2 "$candidate"
+            fi
+          done < <(find "$stage/runtime/python" -type f -print0)
+
+          echo "Developer ID-signed $signed Mach-O files."
+
+      - name: Package and verify macOS archive
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          stage_parent="$RUNNER_TEMP/CodexBridge Portable 测试 with spaces"
+          verify="$RUNNER_TEMP/CodexBridge Archive Verify"
+          rm -rf "$verify"
+
           (cd "$stage_parent" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent "CodexBridge" "$GITHUB_WORKSPACE/dist/$ASSET")
           shasum -a 256 "dist/$ASSET" | awk '{print $1 "  '"$ASSET"'"}' > "dist/$ASSET.sha256"
 
@@ -110,6 +217,37 @@ jobs:
           test -f "$verify/CodexBridge/README.md"
           test -f "$verify/CodexBridge/README.en.md"
 
+      - name: Notarize tagged macOS archive
+        if: startsWith(github.ref, 'refs/tags/') && steps.apple-signing.outputs.available == 'true'
+        env:
+          ASSET: ${{ matrix.asset }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/notary-result.json"
+          xcrun notarytool submit "dist/$ASSET" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait \
+            --output-format json > "$result"
+
+          status="$(python3 - "$result" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding='utf-8') as fh:
+    print(json.load(fh).get('status', ''))
+PY
+)"
+          if [[ "$status" != "Accepted" ]]; then
+            echo "::error::Apple notarization did not return Accepted."
+            cat "$result"
+            exit 1
+          fi
+          echo "Apple notarization accepted for $ASSET."
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -119,28 +257,40 @@ jobs:
             dist/${{ matrix.asset }}.sha256
           if-no-files-found: error
 
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download notarized macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CodexBridge-macOS-*
+          path: dist
+          merge-multiple: true
+
       - name: Publish GitHub Release assets
-        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ matrix.asset }}
         run: |
           set -euo pipefail
           tag="${{ github.ref_name }}"
+          assets=(
+            dist/CodexBridge-macOS-AppleSilicon.zip
+            dist/CodexBridge-macOS-AppleSilicon.zip.sha256
+            dist/CodexBridge-macOS-Intel.zip
+            dist/CodexBridge-macOS-Intel.zip.sha256
+          )
 
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "CodexBridge $tag" --generate-notes >/dev/null 2>&1 || true
-          fi
-
-          for attempt in 1 2 3 4 5; do
-            if gh release view "$tag" >/dev/null 2>&1; then
-              break
-            fi
-            if [[ "$attempt" -eq 5 ]]; then
-              echo "::error::GitHub Release $tag was not available after creation."
-              exit 1
-            fi
-            sleep 2
+          for asset in "${assets[@]}"; do
+            [[ -f "$asset" ]] || { echo "::error::Missing release asset: $asset"; exit 1; }
           done
 
-          gh release upload "$tag" "dist/$ASSET" "dist/$ASSET.sha256" --clobber
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --title "CodexBridge $tag" --generate-notes
+          fi
