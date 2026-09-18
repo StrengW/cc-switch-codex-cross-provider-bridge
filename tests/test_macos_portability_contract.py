@@ -40,6 +40,11 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('aarch64-apple-darwin', text)
         self.assertIn('x86_64-apple-darwin', text)
 
+    def test_macos_workflow_runs_on_main_push_and_tags(self):
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", text)
+        self.assertIn("push:\n    branches:\n      - main\n    tags:\n      - 'v*'", text)
+
     def test_macos_workflow_uses_isolated_venv_for_pytest(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn('python3 -m venv "$RUNNER_TEMP/codexbridge-ci-venv"', text)

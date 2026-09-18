@@ -3,6 +3,8 @@ name: macOS CI / signed optional release build
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
