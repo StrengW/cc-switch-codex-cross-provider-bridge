@@ -7,8 +7,8 @@
 
 [下载最新版](../../releases) · [English](README.en.md) · [工作原理](docs/ARCHITECTURE.md)
 
-[![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg)](../../actions/workflows/build-windows-release.yml)
-[![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg)](../../actions/workflows/build-macos-release.yml)
+[![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg?branch=main)](../../actions/workflows/build-windows-release.yml)
+[![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg?branch=main)](../../actions/workflows/build-macos-release.yml)
 [![Releases](https://img.shields.io/badge/Releases-download-blue)](../../releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status: Beta](https://img.shields.io/badge/status-Beta-orange.svg)](#支持范围)
@@ -76,18 +76,24 @@ Start CodexBridge.cmd
 
 > Windows 正式 Release **不再分发预编译 `CodexBridge-Setup.exe`**。不要为了运行 CodexBridge 关闭 Defender、关闭实时保护或给整个目录加白名单。
 
-### macOS
+**方式 C：macOS：Release ZIP**
 
-macOS 当前为 **Beta**。从 [Releases](../../releases) 下载与你的 Mac 对应的包：
+从 [Releases](../../releases) 下载与你的 Mac 对应的包：
 
 ```text
 Apple Silicon → CodexBridge-macOS-AppleSilicon-unsigned.zip
 Intel         → CodexBridge-macOS-Intel-unsigned.zip
 ```
 
-当前 macOS Release 未做 Apple Developer 签名/公证，所以文件名会明确带 `-unsigned`。首次启动若被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
+解压后双击：
 
-以后提供签名/公证版本时，资产名会去掉 `-unsigned`。
+```text
+Start CodexBridge.command
+```
+
+macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因此文件名带 `-unsigned`。
+
+首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
 
 ## 它能做什么？
 

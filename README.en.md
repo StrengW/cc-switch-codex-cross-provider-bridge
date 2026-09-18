@@ -7,8 +7,8 @@ Move between **OpenAI Official**, **DeepSeek**, **GLM**, and **Qwen** in Codex w
 
 [Download](../../releases) · [简体中文](README.md) · [How it works](docs/ARCHITECTURE.md)
 
-[![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg)](../../actions/workflows/build-windows-release.yml)
-[![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg)](../../actions/workflows/build-macos-release.yml)
+[![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg?branch=main)](../../actions/workflows/build-windows-release.yml)
+[![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg?branch=main)](../../actions/workflows/build-macos-release.yml)
 [![Releases](https://img.shields.io/badge/Releases-download-blue)](../../releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status: Beta](https://img.shields.io/badge/status-Beta-orange.svg)](#compatibility)
@@ -58,7 +58,7 @@ Windows → Start CodexBridge.cmd
 macOS   → Start CodexBridge.command
 ```
 
-**Option B: Windows 10/11: use the Release ZIP**
+**Option B: Windows 10/11: recommended Release ZIP**
 
 Download from [Releases](../../releases):
 
@@ -76,18 +76,24 @@ First run prepares a user-local runtime and finishes setup automatically. **No a
 
 > The Windows Release **does not distribute a prebuilt `CodexBridge-Setup.exe`**. Do not disable Defender, disable real-time protection, or broadly whitelist the install directory just to run CodexBridge.
 
-### macOS
+**Option C: macOS: Release ZIP**
 
-macOS is currently **Beta**. Download the package for your Mac from [Releases](../../releases):
+Download the package for your Mac from [Releases](../../releases):
 
 ```text
 Apple Silicon → CodexBridge-macOS-AppleSilicon-unsigned.zip
 Intel         → CodexBridge-macOS-Intel-unsigned.zip
 ```
 
-The current macOS Release is not Apple Developer signed/notarized, so the filename explicitly includes `-unsigned`. Gatekeeper may prompt on first launch; if needed, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
+Extract it, then double-click:
 
-When signed/notarized builds are available later, the `-unsigned` suffix will be removed.
+```text
+Start CodexBridge.command
+```
+
+macOS is currently **Beta**. The Release is not yet Apple Developer signed/notarized, so the filename includes `-unsigned`.
+
+If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
 
 ## What it does
 

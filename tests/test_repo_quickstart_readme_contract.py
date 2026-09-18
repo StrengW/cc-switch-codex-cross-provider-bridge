@@ -17,7 +17,7 @@ class RepoQuickstartReadmeContractTests(unittest.TestCase):
     def test_english_readme_leads_with_safe_windows_release_zip(self):
         text = (ROOT / "README.en.md").read_text(encoding="utf-8-sig")
         self.assertIn('CodexBridge-Windows.zip', text)
-        self.assertIn('Windows 10/11: use the Release ZIP', text)
+        self.assertIn('Windows 10/11: recommended Release ZIP', text)
         self.assertIn('Start CodexBridge.cmd', text)
         self.assertIn('Start CodexBridge.command', text)
         self.assertIn('does not distribute a prebuilt `CodexBridge-Setup.exe`', text)
