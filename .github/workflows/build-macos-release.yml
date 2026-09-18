@@ -237,12 +237,12 @@ jobs:
             --output-format json > "$result"
 
           status="$(python3 - "$result" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding='utf-8') as fh:
-    print(json.load(fh).get('status', ''))
-PY
-)"
+          import json
+          import sys
+          with open(sys.argv[1], encoding='utf-8') as fh:
+              print(json.load(fh).get('status', ''))
+          PY
+          )"
           if [[ "$status" != "Accepted" ]]; then
             echo "::error::Apple notarization did not return Accepted."
             cat "$result"
