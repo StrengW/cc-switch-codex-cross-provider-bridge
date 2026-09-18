@@ -97,8 +97,17 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.ref_name }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/CodexBridge-Windows.zip dist/CodexBridge-Windows.zip.sha256 --clobber
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" \
+              dist/CodexBridge-Windows.zip \
+              dist/CodexBridge-Windows.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
           else
-            gh release create "$tag" dist/CodexBridge-Windows.zip dist/CodexBridge-Windows.zip.sha256 --title "CodexBridge $tag" --generate-notes
+            gh release create "$tag" \
+              dist/CodexBridge-Windows.zip \
+              dist/CodexBridge-Windows.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "CodexBridge $tag" \
+              --generate-notes
           fi

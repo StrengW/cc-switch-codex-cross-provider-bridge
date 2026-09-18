@@ -108,10 +108,6 @@ jobs:
           cp README.md README.en.md "$stage/"
           chmod +x "$stage/Start CodexBridge.command" "$stage/scripts/unix/"*.sh
 
-          # Resolve the runtime by asset *name*, not browser_download_url.
-          # GitHub percent-encodes the '+' in browser_download_url as %2B, so URL regex
-          # matching incorrectly reported that valid macOS Python assets did not exist.
-          # Query the latest release's paginated asset endpoint so all assets are visible.
           release_id="$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq '.id')"
           asset_jq=".[] | select((.name | startswith(\"cpython-3.12.\")) and (.name | endswith(\"-${TARGET}-install_only_stripped.tar.gz\"))) | .browser_download_url"
           url="$(gh api --paginate "repos/astral-sh/python-build-standalone/releases/${release_id}/assets?per_page=100" --jq "$asset_jq" | sed -n '1p')"
@@ -290,8 +286,13 @@ jobs:
             [[ -f "$asset" ]] || { echo "::error::Missing release asset: $asset"; exit 1; }
           done
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" --clobber
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
           else
-            gh release create "$tag" "${assets[@]}" --title "CodexBridge $tag" --generate-notes
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "CodexBridge $tag" \
+              --generate-notes
           fi

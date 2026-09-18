@@ -90,6 +90,11 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("pattern: CodexBridge-macOS-*", text)
         self.assertIn("merge-multiple: true", text)
 
+    def test_macos_release_commands_explicitly_target_repository(self):
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        self.assertIn('gh release view "$tag" --repo "$GITHUB_REPOSITORY"', text)
+        self.assertGreaterEqual(text.count('--repo "$GITHUB_REPOSITORY"'), 3)
+
     def test_macos_watcher_automates_provider_switch_restart_policy(self):
         text = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")
         self.assertIn('route_kind', text)

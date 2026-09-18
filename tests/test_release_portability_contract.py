@@ -43,6 +43,11 @@ class ReleasePortabilityContractTests(unittest.TestCase):
         self.assertIn("release:\n    if: startsWith(github.ref, 'refs/tags/')", text)
         self.assertIn("contents: write", text)
 
+    def test_windows_release_commands_explicitly_target_repository(self):
+        text = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
+        self.assertIn('gh release view "$tag" --repo "$GITHUB_REPOSITORY"', text)
+        self.assertGreaterEqual(text.count('--repo "$GITHUB_REPOSITORY"'), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
