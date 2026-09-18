@@ -78,14 +78,16 @@ First run prepares a user-local runtime and finishes setup automatically. **No a
 
 ### macOS
 
-macOS is currently **Beta**. Apple Silicon and Intel builds are both CI-validated. Unsigned builds may trigger Gatekeeper on first launch; if needed, use Finder **Right-click → Open** once on `Start CodexBridge.command`.
-
-Planned signed release asset names are:
+macOS is currently **Beta**. Download the package for your Mac from [Releases](../../releases):
 
 ```text
-CodexBridge-macOS-AppleSilicon.zip
-CodexBridge-macOS-Intel.zip
+Apple Silicon → CodexBridge-macOS-AppleSilicon-unsigned.zip
+Intel         → CodexBridge-macOS-Intel-unsigned.zip
 ```
+
+The current macOS Release is not Apple Developer signed/notarized, so the filename explicitly includes `-unsigned`. Gatekeeper may prompt on first launch; if needed, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
+
+When signed/notarized builds are available later, the `-unsigned` suffix will be removed.
 
 ## What it does
 

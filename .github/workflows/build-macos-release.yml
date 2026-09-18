@@ -84,7 +84,7 @@ jobs:
           if [[ "$available" == "true" ]]; then
             echo "Apple signing/notarization credentials are available."
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "::notice::Apple signing credentials are not configured. This tag will skip the formal macOS Release; unsigned macOS CI artifacts will still be built for testing. The Windows Release can proceed independently."
+            echo "::notice::Apple signing credentials are not configured. This tag will publish clearly labeled unsigned macOS Release assets; Gatekeeper may require Finder Right-click → Open on first launch."
           else
             echo "::notice::Apple signing credentials are not configured. This run will produce unsigned macOS CI artifacts only."
           fi
@@ -255,44 +255,84 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download notarized macOS artifacts
+      - name: Download macOS build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: CodexBridge-macOS-*
           path: dist
           merge-multiple: true
 
-      - name: Publish GitHub Release assets
+      - name: Label unsigned macOS assets
+        if: needs.build.outputs.apple_signing_available != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in AppleSilicon Intel; do
+            source="dist/CodexBridge-macOS-${platform}.zip"
+            target="dist/CodexBridge-macOS-${platform}-unsigned.zip"
+
+            [[ -f "$source" ]] || { echo "::error::Missing macOS build asset: $source"; exit 1; }
+
+            mv "$source" "$target"
+            sha256sum "$target" | awk '{print $1 "  " FILENAME}' FILENAME="$(basename "$target")" > "$target.sha256"
+            rm -f "$source.sha256"
+          done
+
+      - name: Wait for the GitHub Release created by Windows
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="${{ github.ref_name }}"
-          assets=(
-            dist/CodexBridge-macOS-AppleSilicon.zip
-            dist/CodexBridge-macOS-AppleSilicon.zip.sha256
-            dist/CodexBridge-macOS-Intel.zip
-            dist/CodexBridge-macOS-Intel.zip.sha256
-          )
+
+          for attempt in $(seq 1 24); do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "GitHub Release $tag is ready."
+              exit 0
+            fi
+            echo "Waiting for Windows workflow to create GitHub Release $tag... ($attempt/24)"
+            sleep 5
+          done
+
+          echo "::error::GitHub Release $tag was not created within 120 seconds. Check the Windows release workflow."
+          exit 1
+
+      - name: Publish macOS Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ needs.build.outputs.apple_signing_available }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+
+          if [[ "$SIGNED" == "true" ]]; then
+            assets=(
+              dist/CodexBridge-macOS-AppleSilicon.zip
+              dist/CodexBridge-macOS-AppleSilicon.zip.sha256
+              dist/CodexBridge-macOS-Intel.zip
+              dist/CodexBridge-macOS-Intel.zip.sha256
+            )
+          else
+            assets=(
+              dist/CodexBridge-macOS-AppleSilicon-unsigned.zip
+              dist/CodexBridge-macOS-AppleSilicon-unsigned.zip.sha256
+              dist/CodexBridge-macOS-Intel-unsigned.zip
+              dist/CodexBridge-macOS-Intel-unsigned.zip.sha256
+            )
+          fi
 
           for asset in "${assets[@]}"; do
             [[ -f "$asset" ]] || { echo "::error::Missing release asset: $asset"; exit 1; }
           done
 
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
-          else
-            gh release create "$tag" "${assets[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "CodexBridge $tag" \
-              --generate-notes
-          fi
+          gh release upload "$tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

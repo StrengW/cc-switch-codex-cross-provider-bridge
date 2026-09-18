@@ -78,14 +78,16 @@ Start CodexBridge.cmd
 
 ### macOS
 
-macOS 当前为 **Beta**。Apple Silicon / Intel 都有 CI 构建验证；未签名版本首次启动可能被 Gatekeeper 提醒，可在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次。
-
-未来正式签名版资产名为：
+macOS 当前为 **Beta**。从 [Releases](../../releases) 下载与你的 Mac 对应的包：
 
 ```text
-CodexBridge-macOS-AppleSilicon.zip
-CodexBridge-macOS-Intel.zip
+Apple Silicon → CodexBridge-macOS-AppleSilicon-unsigned.zip
+Intel         → CodexBridge-macOS-Intel-unsigned.zip
 ```
+
+当前 macOS Release 未做 Apple Developer 签名/公证，所以文件名会明确带 `-unsigned`。首次启动若被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
+
+以后提供签名/公证版本时，资产名会去掉 `-unsigned`。
 
 ## 它能做什么？
 

@@ -68,32 +68,32 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('endswith(\\\"-${TARGET}-install_only_stripped.tar.gz\\\")', text)
         self.assertNotIn('assets[].browser_download_url | select(test(', text)
 
-    def test_tagged_macos_release_is_optional_without_apple_credentials(self):
+    def test_tagged_macos_release_publishes_clearly_labeled_unsigned_assets_without_apple_credentials(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn("apple_signing_available: ${{ steps.apple-signing.outputs.available }}", text)
-        self.assertIn("This tag will skip the formal macOS Release", text)
+        self.assertIn("publish clearly labeled unsigned macOS Release assets", text)
         self.assertNotIn("A tagged macOS Release requires Developer ID signing and Apple notarization credentials", text)
-        self.assertIn("startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'", text)
+        self.assertIn("CodexBridge-macOS-AppleSilicon-unsigned.zip", text)
+        self.assertIn("CodexBridge-macOS-Intel-unsigned.zip", text)
         self.assertIn("--options runtime", text)
         self.assertIn("--timestamp", text)
         self.assertIn("xcrun notarytool submit", text)
         self.assertIn("Apple notarization did not return Accepted", text)
 
-    def test_macos_build_job_is_read_only_and_release_job_gets_write_permission(self):
+    def test_macos_build_job_is_read_only_and_tag_release_gets_write_permission(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn("permissions:\n  contents: read", text)
-        self.assertIn(
-            "release:\n    if: startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'",
-            text,
-        )
+        self.assertIn("release:\n    if: startsWith(github.ref, 'refs/tags/')", text)
         self.assertIn("contents: write", text)
         self.assertIn("pattern: CodexBridge-macOS-*", text)
         self.assertIn("merge-multiple: true", text)
+        self.assertIn("Wait for the GitHub Release created by Windows", text)
 
     def test_macos_release_commands_explicitly_target_repository(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn('gh release view "$tag" --repo "$GITHUB_REPOSITORY"', text)
-        self.assertGreaterEqual(text.count('--repo "$GITHUB_REPOSITORY"'), 3)
+        self.assertIn('gh release upload "$tag" "${assets[@]}"', text)
+        self.assertGreaterEqual(text.count('--repo "$GITHUB_REPOSITORY"'), 2)
 
     def test_macos_watcher_automates_provider_switch_restart_policy(self):
         text = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")
