@@ -13,5 +13,5 @@ def test_readmes_link_windows_macos_ci_and_releases():
         assert "../../releases" in text
         assert "https://github.com/StrengW/cc-switch-codex-cross-provider-bridge" not in text
         assert "CodexBridge-Windows.zip" in text
-        assert "CodexBridge-macOS-AppleSilicon.zip" in text
-        assert "CodexBridge-macOS-Intel.zip" in text
+        assert "CodexBridge-macOS-AppleSilicon-unsigned.zip" in text
+        assert "CodexBridge-macOS-Intel-unsigned.zip" in text
