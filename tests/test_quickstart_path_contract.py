@@ -54,7 +54,7 @@ class QuickStartPathContractTests(unittest.TestCase):
         )
         self.assertIn("--autostart", text)
         self.assertIn("RegisterStableAutostart", text)
-        self.assertIn("1.7.9-standard-uninstall", text)
+        self.assertIn('private const string LauncherVersion = "', text)
 
 
 if __name__ == "__main__":

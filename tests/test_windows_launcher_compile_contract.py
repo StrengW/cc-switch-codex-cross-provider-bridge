@@ -19,7 +19,7 @@ def test_powershell_exe_path_is_defined_on_program_where_callers_expect_it():
 
 def test_launcher_compile_fix_version_is_present():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
-    assert 'LauncherVersion = "1.7.9-standard-uninstall"' in text
+    assert 'private const string LauncherVersion = "' in text
 
 
 def test_removed_ccswitch_trigger_flag_is_not_referenced():

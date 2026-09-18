@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectRoot,
     [string]$OutputDir
@@ -37,10 +37,15 @@ $files = @(
     'Uninstall CodexBridge.cmd',
     'README.md',
     'README.en.md',
+    'VERSION',
+    'CHANGELOG.md',
     'LICENSE',
     'SECURITY.md',
     'assets\CodexBridgeLauncher.ico',
     'docs\ARCHITECTURE.md',
+    'docs\COMPATIBILITY.md',
+    'docs\VERSIONING.md',
+    'docs\PROJECT_OVERVIEW.zh-CN.md',
     'src\bridge\codex_provider_bridge.py',
     'src\launcher\CodexBridgeLauncher.cs',
     'src\launcher\CodexBridgeLauncher.csproj',

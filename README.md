@@ -5,7 +5,7 @@
 **切 Provider，不切会话。**  
 在 Codex 里从 **OpenAI Official** 切到 **DeepSeek / GLM / Qwen**，再切回来，尽可能继续同一条对话。
 
-[下载最新版](../../releases) · [English](README.en.md) · [工作原理](docs/ARCHITECTURE.md)
+[下载最新版](../../releases) · [English](README.en.md) · [工作原理](docs/ARCHITECTURE.md) · [兼容性](docs/COMPATIBILITY.md)
 
 [![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg?branch=main)](../../actions/workflows/build-windows-release.yml)
 [![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg?branch=main)](../../actions/workflows/build-macos-release.yml)
@@ -95,6 +95,40 @@ macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因
 
 首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
 
+## 日常使用（Windows）
+
+CodexBridge 启动后会常驻 Windows 系统托盘。右键托盘图标可以：
+
+- **Status: ...**：查看当前运行状态。
+- **Restart Codex**：手动重启 Codex。
+- **Restart CC Switch**：手动重启 CC Switch。
+- **Ensure Bridge Running**：检查并恢复 Bridge。
+- **Pause automatic restarts**：临时暂停自动重启处理。
+- **Start CodexBridge with Windows**：开关 Windows 登录自启动。
+- **Open Installed App Folder / Open ... Log / Open Log Folder**：打开安装目录或日志。
+- **Exit Everything...**：关闭 CodexBridge、Bridge 和 CC Switch；不会卸载，也不会改写 `config.toml` 或重启 Codex。轻量 watcher 会继续保留，之后重新打开 CC Switch 时 CodexBridge 会自动启动。
+- **Uninstall CodexBridge...**：彻底卸载 CodexBridge。
+
+双击托盘图标会直接打开日志目录。
+
+## 卸载（Windows）
+
+推荐直接使用：
+
+```text
+托盘图标 → Uninstall CodexBridge...
+```
+
+也可以在仓库或 Release 包中双击：
+
+```text
+Uninstall CodexBridge.cmd
+```
+
+卸载会关闭 Bridge 和 CC Switch，删除 CodexBridge 的本地程序、runtime、日志、自启动项和 watcher，并优先恢复安装前的 Codex 配置；如果没有完整的安装前配置快照，则回退到直接 Official 路由。
+
+**不会删除你的 Codex 聊天记录。**
+
 ## 它能做什么？
 
 - **继续同一条会话**：Official ↔ DeepSeek / GLM / Qwen 切换时，尽量保持原 Codex 对话可继续。
@@ -139,9 +173,11 @@ flowchart LR
     S --> P[DeepSeek / GLM / Qwen / ...]
 ```
 
-CodexBridge 保持稳定的 `custom` provider 身份，在请求层处理跨 Provider 的 ID、tool、reasoning 和 continuation state 兼容问题。
+CodexBridge 保持稳定的 `custom` provider 身份。**Codex 当前可见的对话历史是共同事实，但每个 Provider 的隐藏状态彼此隔离**：Official 优先使用受保护的 resident WebSocket continuation；第三方只在 checkpoint 能证明安全时复用 provider-local cursor。只要跨 Provider（包括 DeepSeek → GLM 这种三方之间切换），不能共享的 response id / reasoning / tool state 都必须经过 portable replay 边界。
 
-想看完整状态机、resident continuation、shadow state 和 compatibility firewall 设计：见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+如果 continuation 不能证明安全，就发送完整 portable replay；如果目标上游明确返回典型的跨 Provider structured-state 400/422，compatibility firewall 才会做一次更保守的 stateless retry。它不会为了“兼容”去伪造 tool output，也不会把普通鉴权、额度、模型不存在等错误伪装成历史格式问题。
+
+完整设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；已验证与 Best-effort Provider 边界见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
 ## 常见问题
 
@@ -169,7 +205,18 @@ Official 路由不依赖 CC Switch；第三方路由依赖 CC Switch 的本地�
 <details>
 <summary><strong>为什么不能保证“任何模型 100% 都能切”？</strong></summary>
 
-不同 Provider 对 Responses、tool call、reasoning、streaming 和 continuation state 的实现并不完全一致。CodexBridge 的目标是：能兼容就继续，能安全降级就 fallback，仍不支持时明确失败而不是污染原会话。
+不同 Provider 对 Responses、tool call、reasoning、streaming 和 continuation state 的实现并不完全一致。CodexBridge 的兼容逻辑尽量按“能力和状态安全”判断，而不是给 DeepSeek / GLM / Qwen 分别写死一套分支：能安全 continuation 就继续，不能就 full replay，仍不支持时明确失败而不是污染原会话。
+
+目前 Official / GLM / DeepSeek / Qwen 是回归验证路径；其他 Provider 为 Best effort。详见 [兼容性说明](docs/COMPATIBILITY.md)。
+
+</details>
+
+<details>
+<summary><strong>为什么还要发布 GitHub Release，直接下载源码 ZIP 不行吗？</strong></summary>
+
+源码 ZIP 更像“仓库快照”；Release 把一个经过 CI 验证的 tag、平台包、SHA-256 和变更记录绑定在一起，让普通用户能下载明确的 Windows / macOS 产物，也让项目出现问题时可以准确定位和回滚到某个版本。
+
+项目的公开版本以根目录 [`VERSION`](VERSION) 为准；版本规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 
 </details>
 
@@ -196,6 +243,10 @@ Windows 日志默认在：
 ## 开发与贡献
 
 - 架构说明：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- 兼容性矩阵：[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+- 项目讲解 / 面试版：[docs/PROJECT_OVERVIEW.zh-CN.md](docs/PROJECT_OVERVIEW.zh-CN.md)
+- 版本规则：[docs/VERSIONING.md](docs/VERSIONING.md)
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)
 - 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
 - 安全策略：[SECURITY.md](SECURITY.md)
 

@@ -1,37 +1,156 @@
 # Architecture
 
-## Active mode
+CodexBridge is a local compatibility layer for keeping one Codex conversation usable while the upstream route changes between OpenAI Official and CC Switch-backed third-party providers.
+
+## 1. Stable Codex-facing identity
 
 ```text
 Codex
-  -> custom provider
+  -> model_provider = "custom"
   -> http://127.0.0.1:15722/v1 (CodexBridge)
-       |-- Official models -> https://chatgpt.com/backend-api/codex
-       `-- Third-party models -> http://127.0.0.1:15721 (CC Switch)
+       |-- Official route ----> ChatGPT Codex backend
+       `-- Third-party route -> http://127.0.0.1:15721 (CC Switch)
+                                -> selected provider/model
 ```
 
-The custom provider identity stays stable. Provider switching is represented by routing/catalog state rather than changing Codex away from `model_provider = "custom"`.
+Codex keeps one stable custom-provider identity. Provider switching is represented by CodexBridge route/catalog state rather than repeatedly changing Codex between unrelated provider identities.
 
-## Third-party proxy supervision
+The bridge is therefore the stable boundary where provider-specific state can be isolated and translated conservatively.
 
-When the active route is third-party, the launcher checks `127.0.0.1:15721` periodically. If CC Switch is closed or its proxy disappears, CodexBridge relaunches CC Switch and waits for the proxy to become ready. This recovery does not change the selected third-party provider/model and does not restart the Bridge.
+## 2. Source of truth: visible conversation vs provider-owned state
 
-The user-facing tray action is **Exit Everything...**. It first shows a confirmation warning. If confirmed, it stops the launcher, Bridge, and CC Switch while deliberately leaving `config.toml` and Codex untouched. The lightweight CC Switch trigger watcher remains armed so a later normal CC Switch launch can relaunch CodexBridge automatically. It never performs native-Official handoff and never restarts Codex during explicit exit.
+The central invariant is:
 
-## Resident compatibility lifecycle
+> **The visible Codex conversation is shared task state; provider-owned hidden state is not shared across providers.**
 
-The local Bridge remains the stable compatibility layer at `127.0.0.1:15722`. Official traffic can continue with CC Switch closed. If a third-party route is active and `127.0.0.1:15721` disappears, only the CC Switch proxy is restored; Codex is not restarted unless the actual provider/model route changes.
+Portable conversation state includes the visible user/assistant timeline and complete portable tool call/output pairs. Provider-owned state can include response/item IDs, encrypted reasoning payloads, hidden continuation state, hosted-tool state, or other adapter-specific metadata.
 
-## Continuation state
+A state handle created by Provider A is never assumed to be meaningful to Provider B. This rule applies to every provider boundary, including third-party-to-third-party switches such as DeepSeek -> GLM.
 
-Official uses guarded resident WebSocket continuation. Third-party routes use conversation-scoped shadow cursors and durable `previous_response_id` continuation where supported. Provider-specific state is not the same thing as sharing one provider's internal prompt cache with another provider.
+## 3. Routing and model catalogs
 
-### Correctness-first shadow safety (v2.12)
+The bridge keeps provider routing separate from the model name that Codex currently carries in a request.
 
-Third-party durable continuation is intentionally narrower than Official resident continuation. A third-party shadow cursor is reused only for completion-verified, tool-free conversations whose system/developer instruction envelope remains semantically stable. If the replay contains tool calls/results, an open tool chain, an unverified/empty completion, a branch/prefix mismatch, or instruction drift, CodexBridge sends the complete current portable replay instead of attaching the saved `previous_response_id`.
+- Official user-facing/internal models are routed to the Official backend.
+- Third-party models are routed through the CC Switch proxy on `127.0.0.1:15721`.
+- Stale model names immediately after a route change can be rebound to the selected route where the existing guarded model-rewrite rules allow it.
+- Provider-scoped model catalog snapshots keep the Codex picker from exposing stale models from another route.
 
-This trades some token savings for a stronger invariant: **a saved provider cursor must never override the visible Codex task state**. Tool-heavy agent workflows therefore prefer replay correctness over hidden provider-state reuse.
+Model-catalog compatibility metadata such as `comp_hash` is neutralized only where the existing bridge guard requires it; missing hashes are treated as unknown compatibility, not fabricated compatibility.
 
-### Thread identity
+## 4. Official continuation
 
-For current Codex HTTP Responses requests, CodexBridge prefers the `x-client-request-id` header as the logical thread identity and hashes it before using it in an internal shadow-state key. This prevents two unrelated chats with the same first user prompt from sharing one provider cursor. Older clients without the header use the legacy first-user fingerprint fallback.
+Official uses guarded resident Responses WebSocket continuation.
+
+A completed Official conversation can remain attached to its original upstream WebSocket while the Codex client or CC Switch is restarted. A new Codex connection begins on an isolated bootstrap Official socket. It is migrated to an older resident socket only after the incoming full replay proves that it belongs to that resident conversation.
+
+When that proof succeeds, the bridge can convert a restart-generated full replay into:
+
+```text
+trusted previous_response_id + provider-unseen delta
+```
+
+If the resident socket has expired, the replay does not match, or the upstream rejects the live continuation state, correctness falls back to the complete current replay.
+
+Official `store=false` semantics are preserved; cross-restart reuse relies on the live resident session and stable prompt-cache bucketing rather than pretending a stored Official response exists when it does not.
+
+## 5. Third-party provider-local continuation
+
+Third-party HTTP routes can use conversation-scoped shadow checkpoints when the upstream supports durable response state.
+
+The durable state key is scoped by provider namespace/model and, when available, a privacy-preserving hash of Codex's logical `x-client-request-id`. Older clients fall back to a first-user conversation fingerprint.
+
+A third-party checkpoint is reused only when the bridge can prove that it is safe. In particular, provider-local continuation is rejected when the current/saved state contains conditions such as:
+
+- tool-bearing history;
+- an open or unverifiable tool chain;
+- an unverified/empty completion;
+- a timeline prefix mismatch;
+- instruction layout/content drift.
+
+When any guard fails, the bridge sends the complete current portable replay instead of attaching a stale hidden cursor.
+
+If an upstream explicitly rejects `store` / durable continuation, the bridge records that capability as unsupported for the current process and continues with stateless replay instead of repeatedly retrying the same unsupported optimization.
+
+## 6. Portable replay boundary
+
+Cross-provider replay removes state that cannot safely cross provider boundaries while preserving the visible task history.
+
+The portable path can remove or neutralize:
+
+- provider item IDs;
+- stale/cross-provider `previous_response_id`;
+- opaque `encrypted_content`;
+- provider-owned reasoning/compaction/item-reference state when required by the guarded path;
+- optional provider/cache hints after an explicit compatibility rejection.
+
+For tool history, complete portable call/output pairs are retained. Dangling calls or outputs can be omitted on the compatibility retry path, but CodexBridge **never fabricates a tool result**.
+
+A portable full replay uses `store=false` so the next provider is not required to resolve server-side state created by the previous provider.
+
+## 7. Compatibility firewall
+
+The compatibility firewall is a **post-rejection fallback**, not unconditional request rewriting.
+
+For HTTP Responses requests, a single provider-neutral stateless retry is allowed only after a 400/422 error matches a conservative cross-provider portability signature, for example an explicit rejection involving:
+
+- invalid provider item IDs;
+- unverifiable encrypted content;
+- stale `previous_response_id`;
+- structured reasoning/item-reference state;
+- missing tool call/output counterparts.
+
+Authentication failures, quota/rate-limit failures, model availability failures, and generic upstream errors are not treated as portability errors simply because they use a 400/422 status.
+
+The fallback order is intentionally narrow:
+
+```text
+normal request
+  -> cache-syntax fallback when explicitly rejected
+  -> stale saved previous_response_id fallback when explicitly rejected
+  -> durable-store fallback when explicitly rejected
+  -> compatibility-firewall portable retry for recognized state errors
+  -> otherwise return the real upstream failure
+```
+
+This prevents a compatibility mechanism from masking unrelated provider problems.
+
+## 8. Third-party proxy supervision and lifecycle
+
+The local Bridge remains the stable compatibility layer at `127.0.0.1:15722`.
+
+When a third-party route is active, the Launcher supervises the CC Switch proxy on `127.0.0.1:15721`. If the proxy disappears, it attempts to restore CC Switch without changing the selected provider/model. Codex is restarted only under the already-tested route/model refresh policy, not merely because the proxy was temporarily unavailable.
+
+Official traffic can continue while CC Switch is closed.
+
+### Exit Everything
+
+The tray action **Exit Everything...**:
+
+- asks for confirmation;
+- stops the Launcher/Bridge/CC Switch functional components;
+- deliberately leaves Codex and `config.toml` untouched;
+- leaves the lightweight CC Switch trigger watcher armed so a later normal CC Switch launch can relaunch CodexBridge.
+
+It is not an uninstall operation.
+
+### Uninstall
+
+The Windows uninstaller removes CodexBridge-owned application/runtime/log/startup/watcher state and restores the pre-install Codex configuration when a usable snapshot is available. If a complete snapshot is unavailable, it prepares a safe direct-Official fallback. Saved Codex chat/session history is not deleted.
+
+## 9. Correctness-first design invariants
+
+1. **Never let a stale provider cursor override the visible Codex task state.**
+2. **Never reuse provider-private state across a provider/model boundary without proof.**
+3. **Never fabricate tool outputs to make a replay look complete.**
+4. **Prefer complete portable replay over an unproven continuation optimization.**
+5. **Do not rewrite unrelated upstream failures as portability failures.**
+6. **Do not directly rewrite saved Codex chat/session history as part of normal compatibility handling.**
+
+These invariants are why CodexBridge can optimize continuation when safe while still retaining a conservative stateless fallback for new or partially compatible providers.
+
+## 10. Compatibility scope
+
+See [`COMPATIBILITY.md`](COMPATIBILITY.md) for regression-tested route families, best-effort providers, and the capability assumptions required for an untested provider to work.
+
+See [`VERSIONING.md`](VERSIONING.md) for the distinction between the public product version and internal component revision markers.

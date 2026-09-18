@@ -11,6 +11,8 @@ class ReleasePortabilityContractTests(unittest.TestCase):
         self.assertIn("must not accidentally regress", text)
         self.assertIn("*.exe", text)
         self.assertIn("Start CodexBridge.cmd", text)
+        self.assertIn("'VERSION'", text)
+        self.assertIn("'CHANGELOG.md'", text)
         self.assertIn("codex_provider_bridge.py", text)
         self.assertNotIn("BuildStandaloneBridge.ps1", text)
         self.assertNotIn("BuildCodexBridgeSetup.ps1", text)
@@ -36,6 +38,7 @@ class ReleasePortabilityContractTests(unittest.TestCase):
         self.assertIn("测试 with spaces", text)
         self.assertIn("CodexBridge-Windows.zip.sha256", text)
         self.assertIn("Safe Windows release package must not contain prebuilt .exe files", text)
+        self.assertIn("Release package VERSION mismatch", text)
 
     def test_build_job_is_read_only_and_tag_release_gets_write_permission(self):
         text = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
@@ -58,3 +61,10 @@ def test_windows_workflow_pins_pytest_and_runs_all_pytest_contracts():
     assert "pytest==9.0.2" in workflow
     assert "python -m pytest tests -v" in workflow
     assert "pyinstaller" not in workflow.lower()
+
+
+def test_windows_workflow_runs_on_main_and_tags_and_validates_version():
+    workflow = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
+    assert "push:\n    branches:\n      - main\n    tags:\n      - 'v*'" in workflow
+    assert "Validate public version metadata" in workflow
+    assert 'does not match VERSION' in workflow

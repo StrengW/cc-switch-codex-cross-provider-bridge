@@ -13,7 +13,7 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('$CPB_SCRIPT_DIR/codex_provider_bridge.py', text)
         self.assertIn('$CPB_SCRIPT_DIR/python3', text)
         self.assertIn('$CPB_PROJECT_ROOT/src/bridge/codex_provider_bridge.py', text)
-        self.assertIn('2.15.2-resident-lifecycle-fix', text)
+        self.assertIn('CPB_VERSION=', text)
 
     def test_double_click_macos_entrypoint_is_location_independent(self):
         path = ROOT / "Start CodexBridge.command"
@@ -45,6 +45,13 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("push:\n    branches:\n      - main\n    tags:\n      - 'v*'", text)
 
+
+    def test_macos_workflow_validates_public_version_metadata(self):
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        self.assertIn("Validate public version metadata", text)
+        self.assertIn("does not match VERSION", text)
+        self.assertIn("tr -d '[:space:]' < VERSION", text)
+
     def test_macos_workflow_uses_isolated_venv_for_pytest(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn('python3 -m venv "$RUNNER_TEMP/codexbridge-ci-venv"', text)
@@ -57,6 +64,10 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('Normalize macOS executable permissions', text)
         self.assertIn('chmod +x "Start CodexBridge.command"', text)
         self.assertIn('stage="$stage_parent/CodexBridge"', text)
+        self.assertIn('cp README.md README.en.md VERSION CHANGELOG.md SECURITY.md', text)
+        self.assertIn('CodexBridge $version / ${{ github.ref_name }} / ${{ matrix.arch }}', text)
+        self.assertIn('test -f "$verify/CodexBridge/VERSION"', text)
+        self.assertIn('test -f "$verify/CodexBridge/BUILD.txt"', text)
         self.assertIn('/usr/bin/ditto -x -k "dist/$ASSET" "$verify"', text)
         self.assertIn('test -x "$verify/CodexBridge/Start CodexBridge.command"', text)
         self.assertNotIn('| head -n 1', text)

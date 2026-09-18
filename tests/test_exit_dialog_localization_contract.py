@@ -16,4 +16,4 @@ def test_exit_dialog_follows_windows_ui_culture():
 
 def test_localization_change_does_not_touch_bridge_core_contract():
     src = Path("src/launcher/CodexBridgeLauncher.cs").read_text(encoding="utf-8-sig")
-    assert 'LauncherVersion = "1.7.9-standard-uninstall"' in src
+    assert 'private const string LauncherVersion = "' in src

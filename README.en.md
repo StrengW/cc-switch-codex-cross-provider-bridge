@@ -5,7 +5,7 @@
 **Switch providers, not conversations.**  
 Move between **OpenAI Official**, **DeepSeek**, **GLM**, and **Qwen** in Codex while keeping the same conversation usable whenever possible.
 
-[Download](../../releases) · [简体中文](README.md) · [How it works](docs/ARCHITECTURE.md)
+[Download](../../releases) · [简体中文](README.md) · [How it works](docs/ARCHITECTURE.md) · [Compatibility](docs/COMPATIBILITY.md)
 
 [![Windows CI](../../actions/workflows/build-windows-release.yml/badge.svg?branch=main)](../../actions/workflows/build-windows-release.yml)
 [![macOS CI](../../actions/workflows/build-macos-release.yml/badge.svg?branch=main)](../../actions/workflows/build-macos-release.yml)
@@ -95,6 +95,40 @@ macOS is currently **Beta**. The Release is not yet Apple Developer signed/notar
 
 If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
 
+## Everyday use (Windows)
+
+After startup, CodexBridge stays in the Windows system tray. Right-click the tray icon to use:
+
+- **Status: ...**: view the current runtime status.
+- **Restart Codex**: restart Codex manually.
+- **Restart CC Switch**: restart CC Switch manually.
+- **Ensure Bridge Running**: check and recover the Bridge.
+- **Pause automatic restarts**: temporarily pause automatic restart handling.
+- **Start CodexBridge with Windows**: enable or disable launch at Windows sign-in.
+- **Open Installed App Folder / Open ... Log / Open Log Folder**: open the install directory or logs.
+- **Exit Everything...**: stop CodexBridge, the Bridge, and CC Switch. This does not uninstall CodexBridge, rewrite `config.toml`, or restart Codex. A lightweight watcher remains armed, so opening CC Switch later starts CodexBridge again.
+- **Uninstall CodexBridge...**: completely uninstall CodexBridge.
+
+Double-clicking the tray icon opens the log folder directly.
+
+## Uninstall (Windows)
+
+Recommended:
+
+```text
+Tray icon → Uninstall CodexBridge...
+```
+
+You can also double-click this file from the repository or Release package:
+
+```text
+Uninstall CodexBridge.cmd
+```
+
+Uninstall stops the Bridge and CC Switch, removes CodexBridge's local program files, runtime, logs, startup registration, and watcher, and restores the pre-install Codex configuration when available. If a complete pre-install snapshot is unavailable, Codex falls back to the direct Official route.
+
+**Your Codex chat history is not deleted.**
+
 ## What it does
 
 - **Keeps one conversation usable** across Official ↔ DeepSeek / GLM / Qwen switches whenever possible.
@@ -139,9 +173,11 @@ flowchart LR
     S --> P[DeepSeek / GLM / Qwen / ...]
 ```
 
-CodexBridge keeps a stable `custom` provider identity and handles cross-provider IDs, tool state, reasoning state, and continuation compatibility in the request path.
+CodexBridge keeps a stable `custom` provider identity. **The visible Codex conversation is shared task state, while each provider's hidden state remains provider-local.** Official prefers guarded resident WebSocket continuation; third-party routes reuse provider-local cursors only when a saved checkpoint is proven safe. Every provider boundary—including third-party-to-third-party switches such as DeepSeek → GLM—uses the portable replay boundary for state that cannot safely cross providers.
 
-For the full state model, resident continuation, shadow state, and compatibility firewall design, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+If continuation cannot be proven safe, CodexBridge sends the complete current portable replay. Only after a target explicitly returns a recognized cross-provider structured-state 400/422 does the compatibility firewall perform one more conservative stateless retry. It never fabricates tool outputs and does not reinterpret ordinary authentication, quota, or model-availability errors as history-format failures.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for regression-tested vs best-effort providers.
 
 ## FAQ
 
@@ -169,7 +205,18 @@ No manual Python installation is required. First run prepares a user-local runti
 <details>
 <summary><strong>Why not promise that every provider will always work?</strong></summary>
 
-Providers differ in Responses, tool calls, reasoning, streaming, and continuation behavior. The goal is: continue when compatible, fall back safely when possible, and fail clearly without contaminating the saved conversation when the upstream still cannot support the request.
+Providers differ in Responses, tool calls, reasoning, streaming, and continuation behavior. CodexBridge tries to make compatibility capability-driven rather than hard-coding one separate path per provider: continue when safe, fall back to full replay when needed, and fail clearly without contaminating the saved conversation when the upstream still cannot support the request.
+
+OpenAI Official, GLM, DeepSeek, and Qwen are the current regression-tested routes; other providers are Best effort. See [Compatibility](docs/COMPATIBILITY.md).
+
+</details>
+
+<details>
+<summary><strong>Why publish GitHub Releases instead of only offering the repository ZIP?</strong></summary>
+
+A repository ZIP is a source snapshot. A Release binds a tested tag to platform-specific artifacts, SHA-256 integrity files, CI history, and release notes so users can download the correct Windows/macOS package and the project can identify or roll back a specific version later.
+
+The public product version comes from [`VERSION`](VERSION). See [docs/VERSIONING.md](docs/VERSIONING.md).
 
 </details>
 
@@ -196,6 +243,9 @@ When opening an Issue, include your Codex version, CC Switch version, provider/m
 ## Development and contributing
 
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Compatibility: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+- Versioning: [docs/VERSIONING.md](docs/VERSIONING.md)
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Security: [SECURITY.md](SECURITY.md)
 
