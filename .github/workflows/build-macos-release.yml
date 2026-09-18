@@ -15,6 +15,8 @@ jobs:
   build:
     permissions:
       contents: read
+    outputs:
+      apple_signing_available: ${{ steps.apple-signing.outputs.available }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,15 +81,12 @@ jobs:
 
           echo "available=$available" >> "$GITHUB_OUTPUT"
 
-          if [[ "$GITHUB_REF" == refs/tags/* && "$available" != "true" ]]; then
-            echo "::error::A tagged macOS Release requires Developer ID signing and Apple notarization credentials. Configure the documented repository secrets before publishing a tag."
-            exit 1
-          fi
-
           if [[ "$available" == "true" ]]; then
             echo "Apple signing/notarization credentials are available."
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::notice::Apple signing credentials are not configured. This tag will skip the formal macOS Release; unsigned macOS CI artifacts will still be built for testing. The Windows Release can proceed independently."
           else
-            echo "::notice::Apple signing credentials are not configured. workflow_dispatch will produce an unsigned CI artifact only; tagged Releases are blocked."
+            echo "::notice::Apple signing credentials are not configured. This run will produce unsigned macOS CI artifacts only."
           fi
 
       - name: Assemble self-contained portable macOS package
@@ -260,7 +259,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:

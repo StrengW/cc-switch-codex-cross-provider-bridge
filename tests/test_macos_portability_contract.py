@@ -52,7 +52,6 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('"$RUNNER_TEMP/codexbridge-ci-venv/bin/python" -m pytest tests -v', text)
         self.assertNotIn('run: python3 -m pip install --disable-pip-version-check pytest', text)
 
-
     def test_macos_workflow_normalizes_permissions_before_tests_and_verifies_archive(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn('Normalize macOS executable permissions', text)
@@ -69,9 +68,12 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('endswith(\\\"-${TARGET}-install_only_stripped.tar.gz\\\")', text)
         self.assertNotIn('assets[].browser_download_url | select(test(', text)
 
-    def test_tagged_macos_release_requires_signing_and_notarization(self):
+    def test_tagged_macos_release_is_optional_without_apple_credentials(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
-        self.assertIn("A tagged macOS Release requires Developer ID signing and Apple notarization credentials", text)
+        self.assertIn("apple_signing_available: ${{ steps.apple-signing.outputs.available }}", text)
+        self.assertIn("This tag will skip the formal macOS Release", text)
+        self.assertNotIn("A tagged macOS Release requires Developer ID signing and Apple notarization credentials", text)
+        self.assertIn("startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'", text)
         self.assertIn("--options runtime", text)
         self.assertIn("--timestamp", text)
         self.assertIn("xcrun notarytool submit", text)
@@ -80,7 +82,10 @@ class MacOSPortabilityContractTests(unittest.TestCase):
     def test_macos_build_job_is_read_only_and_release_job_gets_write_permission(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn("permissions:\n  contents: read", text)
-        self.assertIn("release:\n    if: startsWith(github.ref, 'refs/tags/')", text)
+        self.assertIn(
+            "release:\n    if: startsWith(github.ref, 'refs/tags/') && needs.build.outputs.apple_signing_available == 'true'",
+            text,
+        )
         self.assertIn("contents: write", text)
         self.assertIn("pattern: CodexBridge-macOS-*", text)
         self.assertIn("merge-multiple: true", text)
