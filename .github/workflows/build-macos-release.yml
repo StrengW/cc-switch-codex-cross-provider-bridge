@@ -93,16 +93,22 @@ jobs:
           fi
           sed "s/@VERSION@/$version/g" src/launcher-macos/Info.plist.in > "$app/Contents/Info.plist"
           chmod +x "$app/Contents/MacOS/CodexBridge"
-          test -x "$app/Contents/MacOS/CodexBridge"
-          plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist" | grep -Fx 'com.strengw.codexbridge.launcher'
-          plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" | grep -Fx "$version"
-          plutil -extract LSUIElement raw -o - "$app/Contents/Info.plist" | grep -Fx '1'
+          if [[ ! -x "$app/Contents/MacOS/CodexBridge" ]]; then
+            echo "::error::Launcher executable was not created or is not executable."
+            exit 1
+          fi
+          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" || { echo "::error::Could not read CFBundleIdentifier from Info.plist."; exit 1; }
+          [[ "$bundle_id" == 'com.strengw.codexbridge.launcher' ]] || { echo "::error::Unexpected bundle identifier: $bundle_id"; exit 1; }
+          short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" || { echo "::error::Could not read CFBundleShortVersionString from Info.plist."; exit 1; }
+          [[ "$short_version" == "$version" ]] || { echo "::error::Unexpected launcher version: $short_version (expected $version)."; exit 1; }
+          ui_element="$(plutil -extract LSUIElement raw -o - "$app/Contents/Info.plist")" || { echo "::error::Could not read LSUIElement from Info.plist."; exit 1; }
+          [[ "$ui_element" == '1' || "$ui_element" == 'true' ]] || { echo "::error::LSUIElement is not true: $ui_element"; exit 1; }
           file_output="$(/usr/bin/file -b "$app/Contents/MacOS/CodexBridge")"
           echo "$file_output"
           if [[ "$SWIFT_TARGET" == arm64-* ]]; then
-            grep -q 'arm64' <<<"$file_output"
+            [[ "$file_output" == *arm64* ]] || { echo "::error::Launcher architecture is not arm64: $file_output"; exit 1; }
           else
-            grep -q 'x86_64' <<<"$file_output"
+            [[ "$file_output" == *x86_64* ]] || { echo "::error::Launcher architecture is not x86_64: $file_output"; exit 1; }
           fi
 
       - name: Upload Swift compiler diagnostics
