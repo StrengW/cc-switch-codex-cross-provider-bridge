@@ -63,6 +63,7 @@ jobs:
           fi
 
       - name: Build macOS menu bar launcher bundle
+        id: build-launcher
         env:
           SWIFT_TARGET: ${{ matrix.swift_target }}
         run: |
@@ -97,6 +98,14 @@ jobs:
           else
             grep -q 'x86_64' <<<"$file_output"
           fi
+
+      - name: Upload Swift compiler diagnostics
+        if: failure() && steps.build-launcher.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexBridge-swiftc-diagnostics-${{ matrix.arch }}
+          path: ${{ runner.temp }}/codexbridge-swiftc.log
+          if-no-files-found: error
 
       - name: Create isolated macOS CI test environment
         run: |
