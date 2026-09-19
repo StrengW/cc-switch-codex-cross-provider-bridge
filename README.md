@@ -95,6 +95,8 @@ macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因
 
 首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
 
+启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。菜单栏中的状态、路由、Bridge/Codex/CC Switch 重启、日志、开机启动、完整退出和卸载操作会复用现有后台脚本；后台 watcher 与菜单栏 UI 使用独立的 LaunchAgent。普通关闭 UI 不会停止后台 Bridge，只有确认 `Exit Everything...` 才会停止后台服务。
+
 ## 日常使用（Windows）
 
 CodexBridge 启动后会常驻 Windows 系统托盘。右键托盘图标可以：

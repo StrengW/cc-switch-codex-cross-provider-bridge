@@ -24,10 +24,12 @@ jobs:
           - runner: macos-15
             arch: arm64
             target: aarch64-apple-darwin
+            swift_target: arm64-apple-macosx12.0
             asset: CodexBridge-macOS-AppleSilicon.zip
           - runner: macos-15-intel
             arch: x64
             target: x86_64-apple-darwin
+            swift_target: x86_64-apple-macosx12.0
             asset: CodexBridge-macOS-Intel.zip
     runs-on: ${{ matrix.runner }}
 
@@ -53,11 +55,37 @@ jobs:
       - name: Normalize macOS executable permissions
         run: |
           chmod +x "Start CodexBridge.command"
-          chmod +x scripts/unix/codex_bridge_manager.sh scripts/unix/codex_bridge_watcher.sh
+          chmod +x scripts/unix/codex_bridge_manager.sh scripts/unix/codex_bridge_watcher.sh scripts/unix/codex_bridge_uninstall.sh
 
           git_mode="$(git ls-files --stage -- "Start CodexBridge.command" | awk '{print $1}')"
           if [[ "$git_mode" != "100755" ]]; then
             echo "::warning::Start CodexBridge.command is not marked executable in the Git index. Release artifacts are normalized here, but before publishing the public source ZIP from Windows run scripts/maintainer/PrepareGitHubFromWindows.ps1 and commit the mode change."
+          fi
+
+      - name: Build macOS menu bar launcher bundle
+        env:
+          SWIFT_TARGET: ${{ matrix.swift_target }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          app="$RUNNER_TEMP/CodexBridge.app"
+          rm -rf "$app"
+          mkdir -p "$app/Contents/MacOS"
+          swiftc -O -target "$SWIFT_TARGET" \
+            src/launcher-macos/CodexBridgeLauncher.swift \
+            -o "$app/Contents/MacOS/CodexBridge"
+          sed "s/@VERSION@/$version/g" src/launcher-macos/Info.plist.in > "$app/Contents/Info.plist"
+          chmod +x "$app/Contents/MacOS/CodexBridge"
+          test -x "$app/Contents/MacOS/CodexBridge"
+          plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist" | grep -Fx 'com.strengw.codexbridge.launcher'
+          plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" | grep -Fx "$version"
+          plutil -extract LSUIElement raw -o - "$app/Contents/Info.plist" | grep -Fx '1'
+          file_output="$(/usr/bin/file -b "$app/Contents/MacOS/CodexBridge")"
+          echo "$file_output"
+          if [[ "$SWIFT_TARGET" == arm64-* ]]; then
+            grep -q 'arm64' <<<"$file_output"
+          else
+            grep -q 'x86_64' <<<"$file_output"
           fi
 
       - name: Create isolated macOS CI test environment
@@ -118,11 +146,13 @@ jobs:
           cp "Start CodexBridge.command" "$stage/"
           cp scripts/unix/codex_bridge_manager.sh "$stage/scripts/unix/"
           cp scripts/unix/codex_bridge_watcher.sh "$stage/scripts/unix/"
+          cp scripts/unix/codex_bridge_uninstall.sh "$stage/scripts/unix/"
           cp src/bridge/codex_provider_bridge.py "$stage/src/bridge/"
+          cp -R "$RUNNER_TEMP/CodexBridge.app" "$stage/CodexBridge.app"
           cp README.md README.en.md VERSION CHANGELOG.md SECURITY.md "$stage/"
           mkdir -p "$stage/docs"
           cp docs/ARCHITECTURE.md docs/COMPATIBILITY.md docs/VERSIONING.md docs/PROJECT_OVERVIEW.zh-CN.md "$stage/docs/"
-          chmod +x "$stage/Start CodexBridge.command" "$stage/scripts/unix/"*.sh
+          chmod +x "$stage/Start CodexBridge.command" "$stage/scripts/unix/"*.sh "$stage/CodexBridge.app/Contents/MacOS/CodexBridge"
 
           release_id="$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq '.id')"
           asset_jq=".[] | select((.name | startswith(\"cpython-3.12.\")) and (.name | endswith(\"-${TARGET}-install_only_stripped.tar.gz\"))) | .browser_download_url"
@@ -147,7 +177,10 @@ jobs:
           "$stage/runtime/python/bin/python3" "$stage/src/bridge/codex_provider_bridge.py" --help >/dev/null
           bash -n "$stage/scripts/unix/codex_bridge_manager.sh"
           bash -n "$stage/scripts/unix/codex_bridge_watcher.sh"
+          bash -n "$stage/scripts/unix/codex_bridge_uninstall.sh"
           bash -n "$stage/Start CodexBridge.command"
+          test -x "$stage/CodexBridge.app/Contents/MacOS/CodexBridge"
+          test -f "$stage/CodexBridge.app/Contents/Info.plist"
 
           version="$(tr -d '[:space:]' < VERSION)"
           echo "CodexBridge $version / ${{ github.ref_name }} / ${{ matrix.arch }}" > "$stage/BUILD.txt"
@@ -196,6 +229,19 @@ jobs:
             fi
           done < <(find "$stage/runtime/python" -type f -print0)
 
+          while IFS= read -r -d '' candidate; do
+            if /usr/bin/file -b "$candidate" | grep -q 'Mach-O'; then
+              /usr/bin/codesign \
+                --force \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --keychain "$CODEXBRIDGE_SIGNING_KEYCHAIN" \
+                --options runtime \
+                --timestamp \
+                "$candidate"
+              signed=$((signed + 1))
+            fi
+          done < <(find "$stage/CodexBridge.app" -type f -print0)
+
           if [[ "$signed" -eq 0 ]]; then
             echo "::error::No Mach-O files were found in the bundled Python runtime."
             exit 1
@@ -207,7 +253,16 @@ jobs:
             fi
           done < <(find "$stage/runtime/python" -type f -print0)
 
-          echo "Developer ID-signed $signed Mach-O files."
+          /usr/bin/codesign \
+            --force \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --keychain "$CODEXBRIDGE_SIGNING_KEYCHAIN" \
+            --options runtime \
+            --timestamp \
+            "$stage/CodexBridge.app"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$stage/CodexBridge.app"
+
+          echo "Developer ID-signed $signed Mach-O files and CodexBridge.app."
 
       - name: Package and verify macOS archive
         env:
@@ -226,6 +281,9 @@ jobs:
           test -x "$verify/CodexBridge/Start CodexBridge.command"
           test -x "$verify/CodexBridge/scripts/unix/codex_bridge_manager.sh"
           test -x "$verify/CodexBridge/scripts/unix/codex_bridge_watcher.sh"
+          test -x "$verify/CodexBridge/scripts/unix/codex_bridge_uninstall.sh"
+          test -x "$verify/CodexBridge/CodexBridge.app/Contents/MacOS/CodexBridge"
+          test -f "$verify/CodexBridge/CodexBridge.app/Contents/Info.plist"
           test -x "$verify/CodexBridge/runtime/python/bin/python3"
           test -f "$verify/CodexBridge/src/bridge/codex_provider_bridge.py"
           test -f "$verify/CodexBridge/README.md"

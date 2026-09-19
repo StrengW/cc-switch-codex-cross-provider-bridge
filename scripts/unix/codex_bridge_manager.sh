@@ -52,11 +52,16 @@ CPB_REALTIME_WEBRTC_CALL_BASE_URL="${CPB_REALTIME_WEBRTC_CALL_BASE_URL:-https://
 usage() {
     cat <<'EOF'
 Usage:
-  codex_bridge_manager.sh [auto|start|repair|status|doctor|stop] [options]
+  codex_bridge_manager.sh [auto|start|restart|restart-codex|restart-cc-switch|repair|status|doctor|stop] [options]
 
 Commands:
   auto      Start only for the official/bridge Codex config (default)
   start     Start or reuse the bridge and apply bridge config
+  restart   Stop and start the managed bridge using the same start options
+  restart-codex
+            Delegate Codex backend restart to the existing macOS watcher action
+  restart-cc-switch
+            Delegate CC Switch restart to the existing macOS watcher action
   repair    Apply bridge config without selecting a CC Switch provider
   status    Show bridge, upstream, config, and process status
   doctor    Check prerequisites and machine-specific paths without changing them
@@ -131,7 +136,11 @@ validate_config() {
     (( CPB_SWITCH_REPLAY_RECENT_USER_TURNS >= 1 )) || die 'Recent user turns must be at least 1.'
 }
 
-CPB_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/CodexProviderBridge"
+if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+    CPB_STATE_DIR="${CPB_STATE_ROOT:-$HOME/Library/Application Support/CodexProviderBridge}"
+else
+    CPB_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/CodexProviderBridge"
+fi
 CPB_STATE_FILE="$CPB_STATE_DIR/bridge-state.env"
 CPB_STDOUT_LOG="$CPB_STATE_DIR/bridge-stdout.log"
 CPB_STDERR_LOG="$CPB_STATE_DIR/bridge-stderr.log"
@@ -207,7 +216,7 @@ parse_args() {
     done
 
     case "$CPB_COMMAND" in
-        auto|start|repair|status|doctor|stop) ;;
+        auto|start|restart|restart-codex|restart-cc-switch|repair|status|doctor|stop) ;;
         *) die "Unknown command: $CPB_COMMAND" ;;
     esac
     validate_config
@@ -1222,6 +1231,13 @@ main() {
     case "$CPB_COMMAND" in
         auto) automatic_bridge ;;
         start) start_bridge ;;
+        restart) stop_bridge; CPB_FOREGROUND=0; start_bridge ;;
+        restart-codex)
+            [[ -x "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" ]] || die 'macOS watcher script was not found.'
+            /bin/bash "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" restart-codex ;;
+        restart-cc-switch)
+            [[ -x "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" ]] || die 'macOS watcher script was not found.'
+            /bin/bash "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" restart-cc-switch ;;
         repair) repair_config ;;
         status) show_status ;;
         doctor) show_doctor ;;

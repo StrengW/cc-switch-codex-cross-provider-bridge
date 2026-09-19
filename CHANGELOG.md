@@ -2,6 +2,15 @@
 
 CodexBridge follows semantic public release versions from the repository-root `VERSION` file. Internal component revision labels that may appear in diagnostic logs are implementation markers, not public release versions.
 
+## [0.1.3] - 2026-09-19
+
+### Added
+
+- Added a native AppKit macOS Menu Bar launcher with status, route, restart, log, full-exit, uninstall, and launcher-at-login controls.
+- Added an independent macOS launcher LaunchAgent while preserving the existing watcher LaunchAgent and portable Python Bridge runtime.
+- Added architecture-matched arm64 and x86_64 macOS app bundle construction, archive verification, optional Developer ID signing, and unsigned release labeling.
+- Added macOS launcher portability contracts and preserved the existing Start CodexBridge.command bootstrap path.
+
 ## [0.1.2] - 2026-09-19
 
 ### Fixed

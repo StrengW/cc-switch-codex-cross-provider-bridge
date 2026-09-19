@@ -168,4 +168,15 @@ main() {
   done
 }
 
+case "${1:-}" in
+  restart-codex)
+    restart_codex
+    exit 0
+    ;;
+  restart-cc-switch)
+    restart_cc_switch
+    exit $?
+    ;;
+esac
+
 main "$@"

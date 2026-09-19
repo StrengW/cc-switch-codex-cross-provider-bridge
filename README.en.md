@@ -95,6 +95,8 @@ macOS is currently **Beta**. The Release is not yet Apple Developer signed/notar
 
 If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
 
+After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Its menu exposes status and route information, Bridge/Codex/CC Switch restart actions, logs, launcher-at-login, full exit, and uninstall. These actions reuse the existing backend scripts; the watcher and menu bar UI use separate LaunchAgents. Closing the UI does not stop the background Bridge; only the confirmed `Exit Everything...` action stops background services.
+
 ## Everyday use (Windows)
 
 After startup, CodexBridge stays in the Windows system tray. Right-click the tray icon to use:

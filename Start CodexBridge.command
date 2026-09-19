@@ -9,6 +9,9 @@ UV_ROOT="$RUNTIME_ROOT/uv"
 PY_ROOT="$RUNTIME_ROOT/python"
 LOG="$STATE_ROOT/start.log"
 PLIST="$HOME/Library/LaunchAgents/com.strengw.codexbridge.watcher.plist"
+LAUNCHER_APP="$APP_ROOT/CodexBridge.app"
+LAUNCHER_PLIST="$HOME/Library/LaunchAgents/com.strengw.codexbridge.launcher.plist"
+LAUNCHER_DISABLED="$STATE_ROOT/launcher-disabled"
 
 mkdir -p "$STATE_ROOT" "$APP_ROOT" "$RUNTIME_ROOT" "$(dirname -- "$PLIST")"
 exec > >(tee -a "$LOG") 2>&1
@@ -24,7 +27,8 @@ copy_runtime_files() {
   cp -f "$ROOT/src/bridge/codex_provider_bridge.py" "$APP_ROOT/codex_provider_bridge.py"
   cp -f "$ROOT/scripts/unix/codex_bridge_manager.sh" "$APP_ROOT/codex_bridge_manager.sh"
   cp -f "$ROOT/scripts/unix/codex_bridge_watcher.sh" "$APP_ROOT/codex_bridge_watcher.sh"
-  chmod +x "$APP_ROOT/codex_bridge_manager.sh" "$APP_ROOT/codex_bridge_watcher.sh"
+  cp -f "$ROOT/scripts/unix/codex_bridge_uninstall.sh" "$APP_ROOT/codex_bridge_uninstall.sh"
+  chmod +x "$APP_ROOT/codex_bridge_manager.sh" "$APP_ROOT/codex_bridge_watcher.sh" "$APP_ROOT/codex_bridge_uninstall.sh"
 }
 
 python_ok() {
@@ -107,10 +111,62 @@ EOF
   fi
 }
 
+install_launcher_app() {
+  local version source_app app_binary plist_template
+  source_app="$ROOT/CodexBridge.app"
+  app_binary="$LAUNCHER_APP/Contents/MacOS/CodexBridge"
+  plist_template="$ROOT/src/launcher-macos/Info.plist.in"
+  if [[ -d "$source_app" ]]; then
+    rm -rf -- "$LAUNCHER_APP"
+    cp -R "$source_app" "$LAUNCHER_APP"
+    chmod +x "$app_binary"
+    return 0
+  fi
+  if [[ -f "$ROOT/src/launcher-macos/CodexBridgeLauncher.swift" ]] && command -v swiftc >/dev/null 2>&1; then
+    version="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+    rm -rf -- "$LAUNCHER_APP"
+    mkdir -p "$LAUNCHER_APP/Contents/MacOS"
+    swiftc -O "$ROOT/src/launcher-macos/CodexBridgeLauncher.swift" -o "$app_binary"
+    sed "s/@VERSION@/$version/g" "$plist_template" > "$LAUNCHER_APP/Contents/Info.plist"
+    chmod +x "$app_binary"
+    return 0
+  fi
+  echo "[CodexBridge] Menu bar app bundle was not included and swiftc is unavailable; backend watcher will continue without UI." >&2
+  return 1
+}
+
+install_launcher_agent() {
+  local run_at_load=true
+  [[ -f "$LAUNCHER_DISABLED" ]] && run_at_load=false
+  cat > "$LAUNCHER_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.strengw.codexbridge.launcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>$LAUNCHER_APP</string>
+  </array>
+  <key>RunAtLoad</key><$([[ "$run_at_load" == true ]] && echo true || echo false)/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$STATE_ROOT/launcher.log</string>
+  <key>StandardErrorPath</key><string>$STATE_ROOT/launcher.log</string>
+</dict>
+</plist>
+EOF
+  /bin/launchctl bootout "gui/$UID" "$LAUNCHER_PLIST" >/dev/null 2>&1 || true
+  /bin/launchctl bootstrap "gui/$UID" "$LAUNCHER_PLIST" >/dev/null 2>&1 || true
+}
+
 copy_runtime_files
 PYTHON_PATH="$(ensure_python)"
 python_ok "$PYTHON_PATH" || { echo "[CodexBridge] Python runtime setup failed. See: $LOG"; read -r -p "Press Enter to close..." _ || true; exit 1; }
 install_launch_agent
+if install_launcher_app; then
+  install_launcher_agent
+fi
 
 # Start immediately even if launchctl has not scheduled the agent yet.
 if [[ -f "$STATE_ROOT/macos-watcher.pid" ]] && kill -0 "$(cat "$STATE_ROOT/macos-watcher.pid" 2>/dev/null || echo 0)" 2>/dev/null; then
@@ -125,6 +181,9 @@ if ! pgrep -if 'CC[ _-]*Switch|CCSwitch' >/dev/null 2>&1; then
 fi
 
 /usr/bin/osascript -e 'display notification "Codex Bridge is ready and will stay available even when CC Switch is closed." with title "Codex Bridge"' >/dev/null 2>&1 || true
+if [[ -x "$LAUNCHER_APP/Contents/MacOS/CodexBridge" ]]; then
+  /usr/bin/open "$LAUNCHER_APP" >/dev/null 2>&1 || echo "[CodexBridge] Could not open menu bar app; see $STATE_ROOT/launcher.log" >&2
+fi
 echo "[CodexBridge] Ready."
 echo "Runtime: $APP_ROOT"
 echo "Logs: $STATE_ROOT"

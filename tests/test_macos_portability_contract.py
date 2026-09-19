@@ -7,6 +7,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MacOSPortabilityContractTests(unittest.TestCase):
+    def test_macos_launcher_source_and_bundle_template_exist(self):
+        source = ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift"
+        plist = ROOT / "src" / "launcher-macos" / "Info.plist.in"
+        self.assertTrue(source.is_file())
+        self.assertTrue(plist.is_file())
+        source_text = source.read_text(encoding="utf-8")
+        plist_text = plist.read_text(encoding="utf-8")
+        for token in ("import AppKit", "NSStatusItem", "NSMenu", "Process", "Unknown", "Exit Everything", "Uninstall CodexBridge"):
+            self.assertIn(token, source_text)
+        self.assertIn("com.strengw.codexbridge.launcher", plist_text)
+        self.assertIn("LSUIElement", plist_text)
+        self.assertIn("@VERSION@", plist_text)
+
+    def test_macos_launcher_has_safe_localized_lifecycle_and_uninstall_contract(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        uninstall = ROOT / "scripts" / "unix" / "codex_bridge_uninstall.sh"
+        self.assertTrue(uninstall.is_file())
+        uninstall_text = uninstall.read_text(encoding="utf-8")
+        for token in ("Locale.preferredLanguages", "setActivationPolicy(.accessory)", "messageText", "configureNoAsDefaultButton", "com.strengw.codexbridge.launcher", "com.strengw.codexbridge.watcher"):
+            self.assertIn(token, source)
+        for token in ("launchctl", "codex_bridge_manager.sh", "com.strengw.codexbridge.launcher", "com.strengw.codexbridge.watcher", "Application Support/CodexProviderBridge"):
+            self.assertIn(token, uninstall_text)
+        self.assertNotIn("/Users/", source)
+        self.assertNotIn("/Users/", uninstall_text)
+
     def test_manager_supports_repo_and_installed_sibling_runtime(self):
         text = (ROOT / "scripts" / "unix" / "codex_bridge_manager.sh").read_text(encoding="utf-8-sig")
         self.assertIn('CPB_PROJECT_ROOT=', text)
@@ -14,6 +39,10 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('$CPB_SCRIPT_DIR/python3', text)
         self.assertIn('$CPB_PROJECT_ROOT/src/bridge/codex_provider_bridge.py', text)
         self.assertIn('CPB_VERSION=', text)
+        self.assertIn('restart) stop_bridge', text)
+        self.assertIn('restart-codex)', text)
+        self.assertIn('restart-cc-switch)', text)
+        self.assertIn('Library/Application Support/CodexProviderBridge', text)
 
     def test_double_click_macos_entrypoint_is_location_independent(self):
         path = ROOT / "Start CodexBridge.command"
@@ -39,6 +68,13 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('macos-15', text)
         self.assertIn('aarch64-apple-darwin', text)
         self.assertIn('x86_64-apple-darwin', text)
+
+    def test_macos_workflow_builds_and_verifies_architecture_matched_app_bundle(self):
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        for token in ("swiftc", "src/launcher-macos/CodexBridgeLauncher.swift", "Info.plist.in", "CodexBridge.app", "CFBundleShortVersionString", "LSUIElement", "file -b", "executable"):
+            self.assertIn(token, text)
+        self.assertIn("arm64", text)
+        self.assertIn("x86_64", text)
 
     def test_macos_workflow_runs_on_main_push_and_tags(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
@@ -78,6 +114,8 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('startswith(\\\"cpython-3.12.\\\")', text)
         self.assertIn('endswith(\\\"-${TARGET}-install_only_stripped.tar.gz\\\")', text)
         self.assertNotIn('assets[].browser_download_url | select(test(', text)
+        self.assertIn('test -x "$verify/CodexBridge/CodexBridge.app/Contents/MacOS/CodexBridge"', text)
+        self.assertIn('test -f "$verify/CodexBridge/CodexBridge.app/Contents/Info.plist"', text)
 
     def test_tagged_macos_release_publishes_clearly_labeled_unsigned_assets_without_apple_credentials(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
@@ -90,6 +128,8 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("--timestamp", text)
         self.assertIn("xcrun notarytool submit", text)
         self.assertIn("Apple notarization did not return Accepted", text)
+        self.assertIn('find "$stage/CodexBridge.app"', text)
+        self.assertIn('codesign --verify --deep', text)
 
     def test_macos_build_job_is_read_only_and_tag_release_gets_write_permission(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
@@ -115,6 +155,14 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('official', text)
         self.assertIn('Initial resident route', text)
         self.assertIn('restoring proxy without restarting Codex', text)
+
+    def test_macos_bootstrap_installs_launcher_without_replacing_watcher(self):
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertIn("CodexBridge.app", start)
+        self.assertIn("com.strengw.codexbridge.launcher.plist", start)
+        self.assertIn("com.strengw.codexbridge.watcher.plist", start)
+        self.assertIn("open", start)
+        self.assertIn("codex_bridge_uninstall.sh", start)
 
 
 if __name__ == "__main__":
