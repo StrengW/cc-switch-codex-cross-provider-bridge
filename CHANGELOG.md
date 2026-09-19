@@ -12,7 +12,7 @@ CodexBridge follows semantic public release versions from the repository-root `V
 - Added capability invalidation when a learned strict preflight is rejected upstream.
 - Added regression coverage for non-adjacent tool pairs, output-before-call ordering, preflight reuse, and conversation/route isolation.
 
-## [0.1.1] - Unreleased
+## [0.1.1] - 2026-09-18
 
 ### Changed
 
