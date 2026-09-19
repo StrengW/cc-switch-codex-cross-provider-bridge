@@ -82,6 +82,8 @@ jobs:
               cat "$swift_log"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            compiler_message="$(tr '\n' ' ' < "$swift_log" | cut -c 1-6000)"
+            echo "::error file=src/launcher-macos/CodexBridgeLauncher.swift::$compiler_message"
             cat "$swift_log" >&2
             exit 1
           fi
