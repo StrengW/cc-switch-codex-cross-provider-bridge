@@ -71,9 +71,19 @@ jobs:
           app="$RUNNER_TEMP/CodexBridge.app"
           rm -rf "$app"
           mkdir -p "$app/Contents/MacOS"
-          swiftc -O -target "$SWIFT_TARGET" \
+          swift_log="$RUNNER_TEMP/codexbridge-swiftc.log"
+          if ! swiftc -O -target "$SWIFT_TARGET" \
             src/launcher-macos/CodexBridgeLauncher.swift \
-            -o "$app/Contents/MacOS/CodexBridge"
+            -o "$app/Contents/MacOS/CodexBridge" 2>"$swift_log"; then
+            {
+              echo '### Swift compiler output'
+              echo '```text'
+              cat "$swift_log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat "$swift_log" >&2
+            exit 1
+          fi
           sed "s/@VERSION@/$version/g" src/launcher-macos/Info.plist.in > "$app/Contents/Info.plist"
           chmod +x "$app/Contents/MacOS/CodexBridge"
           test -x "$app/Contents/MacOS/CodexBridge"
