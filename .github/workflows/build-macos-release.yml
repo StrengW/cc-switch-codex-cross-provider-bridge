@@ -41,6 +41,10 @@ jobs:
       - name: Validate public version metadata
         run: |
           set -euo pipefail
+          build_log="$RUNNER_TEMP/codexbridge-launcher-build.log"
+          : > "$build_log"
+          exec > >(tee "$build_log") 2>&1
+          trap 'code=$?; if [[ "$code" -ne 0 ]]; then message="$(tail -c 6000 "$build_log" | tr "\\n" " " | tr "\\r" " ")"; echo "::error file=.github/workflows/build-macos-release.yml::$message"; fi' EXIT
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid VERSION value: $version"
@@ -106,7 +110,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CodexBridge-swiftc-diagnostics-${{ matrix.arch }}
-          path: ${{ runner.temp }}/codexbridge-swiftc.log
+          path: |
+            ${{ runner.temp }}/codexbridge-swiftc.log
+            ${{ runner.temp }}/codexbridge-launcher-build.log
           if-no-files-found: error
 
       - name: Create isolated macOS CI test environment
