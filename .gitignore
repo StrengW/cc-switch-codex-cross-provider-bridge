@@ -13,3 +13,12 @@ __pycache__/
 
 .DS_Store
 Thumbs.db
+
+Visual Studio / MSBuild
+**/bin/
+**/obj/
+.vs/
+Local editor settings
+.vscode/
+*.user
+*.suo
