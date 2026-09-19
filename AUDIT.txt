@@ -1,0 +1,81 @@
+CodexBridge strict-tool capability learning hotfix
+==================================================
+
+Goal
+----
+Avoid repeatedly sending the already-proven-to-fail strict tool transcript for one
+problematic Codex conversation, while leaving other Codex conversations and all existing
+successful Provider paths untouched.
+
+Frozen baseline retained
+------------------------
+This patch is based on the already validated strict-tool adjacency hotfix:
+  bridge SHA-256: a4d7a8fb67699c4303d2942265ad64c381f14eab58d06aeaca855a10ad7fb586
+
+Runtime changes are limited to:
+  src/bridge/codex_provider_bridge.py
+
+Not changed:
+  Windows manager logic
+  Launcher logic
+  Setup/uninstall logic
+  Official resident WebSocket continuation behavior
+  existing Provider continuation rules
+  existing compatibility-firewall repair logic
+  ports / routing / CC Switch lifecycle
+
+What was added
+--------------
+1. Process-local StrictToolAdjacencyCapabilityStore.
+2. Capability is learned ONLY when:
+   - upstream first returns explicit strict-tool 400/422;
+   - existing compatibility firewall performs the proven portable strict repair;
+   - retry returns 2xx.
+3. Learning key is (route_serial, provider_state_key).
+   provider_state_key contains the conversation/thread scope and model.
+   Therefore a second Codex conversation using the same model does NOT inherit the rule.
+4. On later turns of the same learned conversation, and only while tool history is present,
+   Bridge sends the exact already-proven provider-neutral/stateless strict repair shape
+   directly instead of intentionally hitting the same 400 again.
+5. If a learned preflight is ever rejected with 400/422, the learned capability is forgotten
+   immediately and the normal compatibility path resumes.
+6. Capability is memory-only. Bridge restart clears it.
+
+Expected log transition
+-----------------------
+First problematic turn:
+  Strict tool adjacency capability learned ...
+  Compatibility firewall activated ... retry_status=200
+  ... portable_retry=true; strict_tool_preflight=false ...
+
+Later turns in that same conversation:
+  ... -> 200
+  portable_retry=false
+  strict_tool_preflight=true
+
+A different Codex conversation remains on the old normal path and can independently learn
+only if it encounters the same explicit strict-tool rejection.
+
+Validation
+----------
+Python compile: PASS
+Targeted unit tests: 12/12 PASS
+Full repository tests: 80 passed, 17 subtests passed
+
+Private integration simulation:
+  first affected thread request: 2 upstream calls (400 + repaired 200)
+  second request same thread:     1 upstream call  (direct preflight 200)
+  first request different thread: 2 upstream calls (normal path preserved)
+Result: TWO_THREAD_SCOPE_OK
+
+Frozen component hashes verified unchanged:
+  scripts/windows/codex_bridge_manager.ps1
+    b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480
+  src/launcher/CodexBridgeLauncher.cs
+    70e8313c31cb02be4bf7507d35fb24880608935ca6898326b37650842b826088
+  src/setup/CodexBridgeSetup.cs
+    f82cdd23a09d7dfd27a80a80dde671730f52a02287ae7e47298b5e70f11cf54d
+
+New bridge SHA-256
+-----------------
+2f43640afbfa83a687201ed53a9d812d3235e9446c72b9e18d75418ba5d94fab

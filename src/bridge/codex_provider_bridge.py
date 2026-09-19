@@ -958,6 +958,184 @@ def _prune_unpaired_tool_items(items: list[object]) -> tuple[list[object], int]:
     return cleaned, omitted
 
 
+def _strict_tool_adjacency_error(error_body: bytes | None) -> bool:
+    """Recognize the narrow tool-transcript ordering failure seen in strict adapters.
+
+    This is intentionally separate from the broader portability classifier.  The extra
+    adjacency repair must run only after the target has explicitly rejected a tool-call
+    transcript, not for unrelated encrypted/reasoning/id portability failures.
+    """
+    if not error_body:
+        return False
+    lowered = error_body.lower()
+    names_tool_state = (
+        b"tool_calls" in lowered
+        or b"tool call" in lowered
+        or b"tool_call_id" in lowered
+        or b"tool message" in lowered
+    )
+    names_adjacency = any(
+        marker in lowered
+        for marker in (
+            b"must be followed",
+            b"followed by tool",
+            b"insufficient tool messages",
+            b"responding to each",
+        )
+    )
+    return names_tool_state and names_adjacency
+
+
+STRICT_TOOL_ADJACENCY_REPAIR_HINT = (
+    b"tool_calls must be followed by tool messages responding to each tool_call_id"
+)
+
+
+class StrictToolAdjacencyCapabilityStore:
+    """Process-local, conversation-scoped memory for proven strict tool adapters.
+
+    A capability is learned only after an explicit strict-tool 400/422 is repaired by the
+    existing compatibility firewall and that retry succeeds.  The key includes the
+    provider-state conversation scope and route serial, so another Codex conversation
+    (or a later route epoch) keeps the already-working normal path untouched.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.required_keys: set[tuple[int, str]] = set()
+
+    @staticmethod
+    def _key(provider_state_key: str, route_serial: int) -> tuple[int, str] | None:
+        if not provider_state_key or provider_state_key == "-":
+            return None
+        return int(route_serial), provider_state_key
+
+    def requires(self, provider_state_key: str, route_serial: int) -> bool:
+        key = self._key(provider_state_key, route_serial)
+        if key is None:
+            return False
+        with self.lock:
+            return key in self.required_keys
+
+    def mark_required(self, provider_state_key: str, route_serial: int) -> bool:
+        key = self._key(provider_state_key, route_serial)
+        if key is None:
+            return False
+        with self.lock:
+            was_new = key not in self.required_keys
+            self.required_keys.add(key)
+            return was_new
+
+    def forget(self, provider_state_key: str, route_serial: int) -> bool:
+        key = self._key(provider_state_key, route_serial)
+        if key is None:
+            return False
+        with self.lock:
+            if key not in self.required_keys:
+                return False
+            self.required_keys.remove(key)
+            return True
+
+
+def make_learned_strict_tool_payload(
+    payload: dict[str, object],
+) -> tuple[dict[str, object], int, int, bool]:
+    """Reuse the already-proven firewall repair shape without another failed probe."""
+    return make_portable_responses_payload(
+        payload, error_body=STRICT_TOOL_ADJACENCY_REPAIR_HINT
+    )
+
+
+def _prune_nonadjacent_tool_groups(items: list[object]) -> tuple[list[object], int]:
+    """Drop globally paired tool groups whose call/output ordering is not portable.
+
+    Some OpenAI-compatible adapters translate Responses function-call items into a
+    Chat-Completions-style assistant ``tool_calls`` message.  Those adapters require that
+    message to be followed immediately by tool messages covering every declared call id
+    before any unrelated message appears.
+
+    Never reorder history and never fabricate a tool result.  Keep a tool group only when a
+    contiguous run of calls is immediately followed by a contiguous run of outputs covering
+    exactly the same unique call ids.  Otherwise omit that invalid tool segment while
+    preserving all non-tool conversation items in their original order.
+    """
+    keep_indexes: set[int] = set()
+    omitted_indexes: set[int] = set()
+    index = 0
+
+    while index < len(items):
+        item = items[index]
+        item_type = item.get("type") if isinstance(item, dict) else None
+
+        if item_type in TOOL_CALL_TYPES:
+            call_indexes: list[int] = []
+            call_ids: list[str] = []
+            cursor = index
+            while cursor < len(items):
+                current = items[cursor]
+                current_type = current.get("type") if isinstance(current, dict) else None
+                if current_type not in TOOL_CALL_TYPES:
+                    break
+                call_indexes.append(cursor)
+                call_id = _tool_link_id(current)
+                if call_id:
+                    call_ids.append(call_id)
+                cursor += 1
+
+            output_indexes: list[int] = []
+            output_ids: list[str] = []
+            while cursor < len(items):
+                current = items[cursor]
+                current_type = current.get("type") if isinstance(current, dict) else None
+                if current_type not in TOOL_OUTPUT_TYPES:
+                    break
+                output_indexes.append(cursor)
+                call_id = _tool_link_id(current)
+                if call_id:
+                    output_ids.append(call_id)
+                cursor += 1
+
+            call_id_set = set(call_ids)
+            output_id_set = set(output_ids)
+            valid_group = bool(
+                call_indexes
+                and output_indexes
+                and len(call_ids) == len(call_indexes)
+                and len(output_ids) == len(output_indexes)
+                and len(call_id_set) == len(call_ids)
+                and len(output_id_set) == len(output_ids)
+                and call_id_set == output_id_set
+            )
+
+            if valid_group:
+                keep_indexes.update(call_indexes)
+                keep_indexes.update(output_indexes)
+            else:
+                omitted_indexes.update(call_indexes)
+                omitted_indexes.update(output_indexes)
+
+            index = cursor
+            continue
+
+        if item_type in TOOL_OUTPUT_TYPES:
+            # An output not consumed by an immediately preceding call group is structurally
+            # orphaned for strict Chat-Completions-style adapters.
+            omitted_indexes.add(index)
+
+        index += 1
+
+    cleaned: list[object] = []
+    for idx, item in enumerate(items):
+        item_type = item.get("type") if isinstance(item, dict) else None
+        if item_type in TOOL_CALL_TYPES | TOOL_OUTPUT_TYPES:
+            if idx in keep_indexes and idx not in omitted_indexes:
+                cleaned.append(item)
+            continue
+        cleaned.append(item)
+
+    return cleaned, len(omitted_indexes)
+
+
 def compact_switch_replay_items(
     items: list[object],
     *,
@@ -2863,6 +3041,14 @@ def make_portable_responses_payload(
         # only the dangling records.  Never synthesize a result.
         portable_items, omitted_unpaired_tools = _prune_unpaired_tool_items(portable_items)
         omitted_provider_items += omitted_unpaired_tools
+
+        # Some strict adapters require a Chat-Completions-style tool transcript: every
+        # assistant tool-call group must be followed immediately by all of its tool results.
+        # Apply this stronger repair only after the upstream explicitly rejected that ordering.
+        # Other portability retries keep their existing behavior unchanged.
+        if _strict_tool_adjacency_error(error_body):
+            portable_items, omitted_nonadjacent_tools = _prune_nonadjacent_tool_groups(portable_items)
+            omitted_provider_items += omitted_nonadjacent_tools
         cleaned["input"] = portable_items
 
     if cleaned.get("previous_response_id") is not None:
@@ -5310,6 +5496,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         http_durable_store_requested = False
         http_store_fallback_payload: object | None = None
         http_prompt_cache_key_added = False
+        http_strict_tool_preflight = False
+        http_strict_tool_preflight_omitted = 0
         direct_official_internal_http = False
         content_type = (self.headers.get("Content-Type") or "").lower()
         if body and "json" in content_type and self.path.rstrip("/").endswith("responses"):
@@ -5425,91 +5613,122 @@ class BridgeHandler(BaseHTTPRequestHandler):
                             http_provider_state_key
                         )
 
-                    stateless_full_payload = dict(payload)
-                    stateless_full_payload["input"] = payload["input"]
-                    stateless_full_payload["store"] = False
-
-                    durable_allowed = bool(
-                        self.server.provider_continuation_enabled  # type: ignore[attr-defined]
-                        and not route_official
-                        and not _looks_official_model(payload.get("model"))
+                    learned_strict_tool_adjacency = bool(
+                        namespace == "third-party"
                         and http_provider_state_key != "-"
-                        and self.server.provider_continuation_store.should_request_durable(  # type: ignore[attr-defined]
-                            http_provider_state_key
+                        and _timeline_contains_tool_state(canonical_items)
+                        and self.server.strict_tool_adjacency_store.requires(  # type: ignore[attr-defined]
+                            http_provider_state_key, http_provider_route_serial
                         )
                     )
-                    if durable_allowed:
-                        durable_full_payload = dict(stateless_full_payload)
-                        durable_full_payload["store"] = True
-                        payload = durable_full_payload
-                        http_durable_store_requested = True
-                        http_store_fallback_payload = stateless_full_payload
-                        http_continuation_plan_key = http_provider_state_key
-                        http_continuation_plan_items = canonical_items
-                        http_continuation_plan_durable = True
 
-                        shadow_diagnostics: dict[str, object] = {}
-                        candidate = self.server.provider_continuation_store.candidate(  # type: ignore[attr-defined]
-                            http_provider_state_key,
-                            canonical_items,
-                            current_route_serial=http_provider_route_serial,
-                            allow_provider_return_instruction_pin=(namespace == "third-party"),
-                            diagnostics=shadow_diagnostics,
-                        )
-                        http_shadow_safety_reason = str(shadow_diagnostics.get("reason", "unknown"))
-                        http_shadow_tool_history = bool(shadow_diagnostics.get("tool_history", False))
-                        http_shadow_tool_chain_closed = bool(shadow_diagnostics.get("tool_chain_closed", True))
-                        http_shadow_instruction_drift = bool(shadow_diagnostics.get("instruction_drift", False))
-                        http_shadow_completion_verified = bool(shadow_diagnostics.get("completion_verified", False))
-                        if candidate is not None:
-                            (
-                                saved_response_id,
-                                suffix,
-                                prefix_items,
-                                prefix_bytes,
-                                instruction_items,
-                                instruction_bytes,
-                                candidate_instruction_pin,
-                            ) = candidate
-                            http_continuation_fallback_payload = durable_full_payload
-                            payload = dict(durable_full_payload)
-                            payload["input"] = suffix
-                            payload["previous_response_id"] = saved_response_id
-                            payload["store"] = True
-                            http_cross_switch_continuation = True
-                            http_continuation_stale_response_id = saved_response_id
-                            http_continuation_prefix_items = prefix_items
-                            http_continuation_prefix_bytes = prefix_bytes
-                            http_continuation_delta_items = len(suffix)
-                            http_continuation_delta_bytes = sum(_json_size(item) for item in suffix)
-                            http_continuation_instruction_items = instruction_items
-                            http_continuation_instruction_bytes = instruction_bytes
-                            http_provider_return_instruction_pin = bool(candidate_instruction_pin)
+                    if learned_strict_tool_adjacency:
+                        (
+                            payload,
+                            _strict_removed_ids,
+                            http_strict_tool_preflight_omitted,
+                            _strict_previous_removed,
+                        ) = make_learned_strict_tool_payload(original_payload)
+                        http_strict_tool_preflight = True
+                        http_shadow_safety_reason = "learned-strict-tool-adjacency"
+                        http_shadow_tool_history = _timeline_contains_tool_state(canonical_items)
+                        http_shadow_tool_chain_closed = True
+                        strict_items = payload.get("input") if isinstance(payload, dict) else None
+                        if isinstance(strict_items, list):
+                            http_replay_bytes_before = sum(_json_size(item) for item in current_items)
+                            http_replay_bytes_after = sum(_json_size(item) for item in strict_items)
                     else:
-                        payload = stateless_full_payload
+                        stateless_full_payload = dict(payload)
+                        stateless_full_payload["input"] = payload["input"]
+                        stateless_full_payload["store"] = False
 
-                http_cache_fallback_payload = payload
-                payload, http_bp_added, _http_bp_eligible, http_cache_options_added = apply_stable_prompt_cache_breakpoints(
-                    payload,
-                    enabled=(
-                        self.server.prompt_cache_optimization  # type: ignore[attr-defined]
-                        and not self.server.explicit_cache_rejected  # type: ignore[attr-defined]
-                    ),
-                )
-                http_namespace = (
-                    "official"
-                    if route_official or _looks_official_model(payload.get("model") if isinstance(payload, dict) else None)
-                    else "third-party"
-                )
-                payload, http_prompt_cache_key_added = apply_prompt_cache_key(
-                    payload,
-                    enabled=(
-                        http_namespace == "official"
-                        and not self.server.prompt_cache_key_rejected  # type: ignore[attr-defined]
-                    ),
-                    namespace=http_namespace,
-                )
-                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                        durable_allowed = bool(
+                            self.server.provider_continuation_enabled  # type: ignore[attr-defined]
+                            and not route_official
+                            and not _looks_official_model(payload.get("model"))
+                            and http_provider_state_key != "-"
+                            and self.server.provider_continuation_store.should_request_durable(  # type: ignore[attr-defined]
+                                http_provider_state_key
+                            )
+                        )
+                        if durable_allowed:
+                            durable_full_payload = dict(stateless_full_payload)
+                            durable_full_payload["store"] = True
+                            payload = durable_full_payload
+                            http_durable_store_requested = True
+                            http_store_fallback_payload = stateless_full_payload
+                            http_continuation_plan_key = http_provider_state_key
+                            http_continuation_plan_items = canonical_items
+                            http_continuation_plan_durable = True
+
+                            shadow_diagnostics: dict[str, object] = {}
+                            candidate = self.server.provider_continuation_store.candidate(  # type: ignore[attr-defined]
+                                http_provider_state_key,
+                                canonical_items,
+                                current_route_serial=http_provider_route_serial,
+                                allow_provider_return_instruction_pin=(namespace == "third-party"),
+                                diagnostics=shadow_diagnostics,
+                            )
+                            http_shadow_safety_reason = str(shadow_diagnostics.get("reason", "unknown"))
+                            http_shadow_tool_history = bool(shadow_diagnostics.get("tool_history", False))
+                            http_shadow_tool_chain_closed = bool(shadow_diagnostics.get("tool_chain_closed", True))
+                            http_shadow_instruction_drift = bool(shadow_diagnostics.get("instruction_drift", False))
+                            http_shadow_completion_verified = bool(shadow_diagnostics.get("completion_verified", False))
+                            if candidate is not None:
+                                (
+                                    saved_response_id,
+                                    suffix,
+                                    prefix_items,
+                                    prefix_bytes,
+                                    instruction_items,
+                                    instruction_bytes,
+                                    candidate_instruction_pin,
+                                ) = candidate
+                                http_continuation_fallback_payload = durable_full_payload
+                                payload = dict(durable_full_payload)
+                                payload["input"] = suffix
+                                payload["previous_response_id"] = saved_response_id
+                                payload["store"] = True
+                                http_cross_switch_continuation = True
+                                http_continuation_stale_response_id = saved_response_id
+                                http_continuation_prefix_items = prefix_items
+                                http_continuation_prefix_bytes = prefix_bytes
+                                http_continuation_delta_items = len(suffix)
+                                http_continuation_delta_bytes = sum(_json_size(item) for item in suffix)
+                                http_continuation_instruction_items = instruction_items
+                                http_continuation_instruction_bytes = instruction_bytes
+                                http_provider_return_instruction_pin = bool(candidate_instruction_pin)
+                        else:
+                            payload = stateless_full_payload
+
+                if http_strict_tool_preflight:
+                    # The successful firewall retry is provider-neutral and stateless. Reuse
+                    # exactly that shape on later turns of this conversation instead of first
+                    # sending the already-proven-to-fail transcript again.
+                    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                else:
+                    http_cache_fallback_payload = payload
+                    payload, http_bp_added, _http_bp_eligible, http_cache_options_added = apply_stable_prompt_cache_breakpoints(
+                        payload,
+                        enabled=(
+                            self.server.prompt_cache_optimization  # type: ignore[attr-defined]
+                            and not self.server.explicit_cache_rejected  # type: ignore[attr-defined]
+                        ),
+                    )
+                    http_namespace = (
+                        "official"
+                        if route_official or _looks_official_model(payload.get("model") if isinstance(payload, dict) else None)
+                        else "third-party"
+                    )
+                    payload, http_prompt_cache_key_added = apply_prompt_cache_key(
+                        payload,
+                        enabled=(
+                            http_namespace == "official"
+                            and not self.server.prompt_cache_key_rejected  # type: ignore[attr-defined]
+                        ),
+                        namespace=http_namespace,
+                    )
+                    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 self.send_error(400, f"Invalid JSON request body: {exc}")
                 return
@@ -5569,6 +5788,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
             # to most stateful: cache syntax -> stale provider response id -> durable
             # store capability -> generic provider-portability fallback.
             if original_payload is not None and response.status in {400, 422}:
+                if http_strict_tool_preflight:
+                    if self.server.strict_tool_adjacency_store.forget(  # type: ignore[attr-defined]
+                        http_provider_state_key, http_provider_route_serial
+                    ):
+                        self.log_message(
+                            "Learned strict-tool preflight was rejected; capability forgotten for %s at route_serial=%s",
+                            http_provider_state_key,
+                            http_provider_route_serial,
+                        )
                 first_error = response.read()
 
                 if (
@@ -5669,6 +5897,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
                 if response.status in {400, 422} and is_portability_error(response.status, first_error):
                     rejected_status = response.status
+                    strict_tool_rejection = _strict_tool_adjacency_error(first_error)
                     connection.close()
                     portable_payload, _, omitted_provider_items, _ = (
                         make_portable_responses_payload(
@@ -5692,6 +5921,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     response = connection.getresponse()
                     portable_retry = True
                     http_continuation_plan_durable = False
+                    if (
+                        strict_tool_rejection
+                        and 200 <= response.status < 300
+                        and http_provider_state_key != "-"
+                    ):
+                        learned_now = self.server.strict_tool_adjacency_store.mark_required(  # type: ignore[attr-defined]
+                            http_provider_state_key, http_provider_route_serial
+                        )
+                        if learned_now:
+                            self.log_message(
+                                "Strict tool adjacency capability learned for %s at route_serial=%s; future turns in this conversation will use the proven portable repair directly",
+                                http_provider_state_key,
+                                http_provider_route_serial,
+                            )
                     self.log_message(
                         "Compatibility firewall activated after upstream HTTP %s; "
                         "sent one provider-neutral stateless replay; omitted_provider_items=%s; retry_status=%s",
@@ -5767,6 +6010,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "model_override=%s; model_rewritten=%s; original_model=%s; "
                 "cleared_reasoning_content=%d; removed_foreign_encrypted_content=%d; "
                 "removed_previous_response_id=%s; portable_retry=%s; omitted_provider_items=%d; "
+                "strict_tool_preflight=%s; strict_tool_preflight_omitted=%d; "
                 "comp_hash_guard=%s; comp_hash_model_entries=%d; comp_hash_neutralized=%d; "
                 "switch_compaction=%s; replay_bytes=%d->%d; "
                 "checkpoint_hit=%s; checkpoint_prefix_items=%d; checkpoint_prefix_bytes=%d; prompt_cache_key_added=%s; "
@@ -5787,6 +6031,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 str(previous_removed).lower(),
                 str(portable_retry).lower(),
                 omitted_provider_items,
+                str(http_strict_tool_preflight).lower(),
+                http_strict_tool_preflight_omitted,
                 str(comp_hash_guard).lower(),
                 comp_hash_model_entries,
                 comp_hash_neutralized,
@@ -5957,6 +6203,7 @@ def main() -> int:
     server.codex_config_path = args.codex_config.strip()  # type: ignore[attr-defined]
     server.replay_checkpoint_store = ReplayPrefixCheckpointStore()  # type: ignore[attr-defined]
     server.provider_continuation_store = ProviderContinuationStore()  # type: ignore[attr-defined]
+    server.strict_tool_adjacency_store = StrictToolAdjacencyCapabilityStore()  # type: ignore[attr-defined]
     server.official_live_sessions = OfficialLiveSessionPool()  # type: ignore[attr-defined]
     server.hot_switch_route_state = HotSwitchRouteState()  # type: ignore[attr-defined]
     server.provider_continuation_enabled = not bool(args.disable_provider_continuation)  # type: ignore[attr-defined]

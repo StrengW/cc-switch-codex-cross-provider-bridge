@@ -2,6 +2,16 @@
 
 CodexBridge follows semantic public release versions from the repository-root `VERSION` file. Internal component revision labels that may appear in diagnostic logs are implementation markers, not public release versions.
 
+## [0.1.2] - 2026-09-19
+
+### Fixed
+
+- Strengthened third-party tool-history compatibility repair with pair completeness plus adjacency/order validation.
+- Restricted strict tool-adjacency repair to the existing HTTP 400/422 compatibility retry path.
+- Added conversation- and route-scoped capability learning so successful strict repair can be reused without affecting unrelated Codex conversations.
+- Added capability invalidation when a learned strict preflight is rejected upstream.
+- Added regression coverage for non-adjacent tool pairs, output-before-call ordering, preflight reuse, and conversation/route isolation.
+
 ## [0.1.1] - Unreleased
 
 ### Changed
