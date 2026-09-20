@@ -95,7 +95,7 @@ macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因
 
 首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
 
-启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。菜单栏中的状态、路由、Bridge/Codex/CC Switch 重启、日志、开机启动、完整退出和卸载操作会复用现有后台脚本；后台 watcher 与菜单栏 UI 使用独立的 LaunchAgent。普通关闭 UI 不会停止后台 Bridge，只有确认 `Exit Everything...` 才会停止后台服务。
+启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。登录时只运行轻量 watcher；当用户打开 CC Switch，watcher 才启动 CodexBridge 菜单栏应用和 Bridge。CodexBridge 不会自动启动或重启 CC Switch。普通关闭 UI 不会停止后台 Bridge，只有确认 `退出 CodexBridge...` 才会停止完整 Launcher、Bridge 和 CC Switch，同时保留 watcher。
 
 ## 日常使用（Windows）
 
@@ -103,12 +103,11 @@ CodexBridge 启动后会常驻 Windows 系统托盘。右键托盘图标可以�
 
 - **Status: ...**：查看当前运行状态。
 - **Restart Codex**：手动重启 Codex。
-- **Restart CC Switch**：手动重启 CC Switch。
 - **Ensure Bridge Running**：检查并恢复 Bridge。
 - **Pause automatic restarts**：临时暂停自动重启处理。
-- **Start CodexBridge with Windows**：开关 Windows 登录自启动。
+- **CC Switch watcher**：Windows 登录时只启动 watcher；它在 CC Switch 从未运行变为运行时启动完整 CodexBridge。该行为不可切换。
 - **Open Installed App Folder / Open ... Log / Open Log Folder**：打开安装目录或日志。
-- **Exit Everything...**：关闭 CodexBridge、Bridge 和 CC Switch；不会卸载，也不会改写 `config.toml` 或重启 Codex。轻量 watcher 会继续保留，之后重新打开 CC Switch 时 CodexBridge 会自动启动。
+- **Exit CodexBridge...**：关闭完整 Launcher、Bridge 和 CC Switch；Official 路由会先切换到 `custom` 直连 Official，第三方路由会直接停止 Bridge。watcher 会继续保留，之后重新打开 CC Switch 时 CodexBridge 会自动启动。
 - **Uninstall CodexBridge...**：彻底卸载 CodexBridge。
 
 双击托盘图标会直接打开日志目录。
@@ -127,7 +126,7 @@ CodexBridge 启动后会常驻 Windows 系统托盘。右键托盘图标可以�
 Uninstall CodexBridge.cmd
 ```
 
-卸载会关闭 Bridge 和 CC Switch，删除 CodexBridge 的本地程序、runtime、日志、自启动项和 watcher，并优先恢复安装前的 Codex 配置；如果没有完整的安装前配置快照，则回退到直接 Official 路由。
+卸载会关闭 Bridge 和 CC Switch，停止并删除 watcher 注册，删除 CodexBridge 的本地程序、runtime 和日志，并优先恢复安装前的 Codex 配置；如果没有完整的安装前配置快照，则回退到直接 Official 路由。
 
 **不会删除你的 Codex 聊天记录。**
 
@@ -135,7 +134,7 @@ Uninstall CodexBridge.cmd
 
 - **继续同一条会话**：Official ↔ DeepSeek / GLM / Qwen 切换时，尽量保持原 Codex 对话可继续。
 - **兼容 tool / reasoning 历史**：跨 Provider 状态不兼容时，自动走安全 fallback，而不是直接把会话炸掉。
-- **自动处理切换**：CC Switch 切 Provider 后，自动处理 Bridge 路由、模型列表和必要的 Codex / CC Switch 重启。
+- **自动处理切换**：CC Switch 切 Provider 后，自动处理 Bridge 路由、模型列表和必要的 Codex 重启；第三方路由不可用时只提示用户打开 CC Switch，不会反向拉起它。
 - **不改写聊天历史**：不直接修改 `.codex/sessions`、Codex SQLite 历史或 `.codex/auth.json`。
 - **一次启动，后台接管**：正常使用时不需要手动改 `config.toml`、手动启动 Bridge 或盯着 CC Switch。
 

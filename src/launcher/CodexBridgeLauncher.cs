@@ -50,12 +50,10 @@ namespace CodexBridgeLauncherApp
         private DateTime pendingSinceUtc = DateTime.MinValue;
         private bool baselineInitialized;
         private bool handling;
-        private bool thirdPartyProxyRecoveryQueued;
-        private DateTime nextThirdPartyProxyHealthUtc = DateTime.MinValue;
+        private bool thirdPartyProxyUnavailable;
         private volatile bool exiting;
         private ToolStripMenuItem statusItem;
         private ToolStripMenuItem pauseItem;
-        private ToolStripMenuItem startupItem;
         private bool paused;
         private readonly string installDir;
         private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -94,15 +92,10 @@ namespace CodexBridgeLauncherApp
             tray.DoubleClick += delegate { OpenLogFolder(); };
 
             Log("Launcher " + LauncherVersion + " started. base=" + baseDir + "; cwd=" + Environment.CurrentDirectory);
-            Log("Policy: Bridge remains the compatibility layer while CodexBridge is running. Third-party => keep CC Switch proxy :15721 supervised and restart Codex only on actual route changes; Official => CC Switch may stay closed. Exit Everything performs an explicit full shutdown after confirmation, without rewriting config.toml or restarting Codex.");
+            Log("Policy: CC Switch is the upstream lifecycle owner. Third-party routes observe proxy :15721 and ask the user to open CC Switch when unavailable; Official routes may run with CC Switch closed. Exit CodexBridge is an explicit shutdown and keeps the lightweight watcher alive.");
             Log("Tray initialized; startup background failures are isolated from the UI process.");
-            bool residentAutoStartEnabled = IsStartupRegistered();
-            Log("Resident CodexBridge auto-start: " + (residentAutoStartEnabled ? "enabled" : "disabled") + "; installed_app=" + installDir);
-            // Keep the lightweight CC Switch trigger watcher independent from the tray/Bridge
-            // lifetime. Exit Everything may stop the functional components, but opening CC Switch
-            // later should relaunch CodexBridge without requiring Start CodexBridge.cmd again.
-            Program.EnsureCcSwitchWatcherRunning(Application.ExecutablePath);
-            Log("CC Switch trigger watcher ensured; it remains armed across Exit Everything.");
+            bool watcherStartupEnabled = Program.IsWatcherStartupRegistered();
+            Log("CC Switch watcher startup: " + (watcherStartupEnabled ? "enabled" : "not registered") + "; installed_app=" + installDir);
 
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -136,9 +129,8 @@ namespace CodexBridgeLauncherApp
             pollTimer.Start();
 
             UpdateStatusText(ui.T("Starting / waiting for route..."));
-            Balloon(ui.T("Codex Bridge Launcher"), residentAutoStartEnabled
-                ? ui.T("Ready. CodexBridge is configured to start with Windows; provider switching and compatibility supervision are active.")
-                : ui.T("Ready. CodexBridge Windows auto-start is disabled; you can enable it from the tray if desired."), ToolTipIcon.Info);
+            Balloon(ui.T("Codex Bridge Launcher"),
+                ui.T("Ready. The CC Switch watcher starts with Windows and launches CodexBridge when CC Switch opens."), ToolTipIcon.Info);
             CheckForUpdates(false);
         }
 
@@ -172,10 +164,6 @@ namespace CodexBridgeLauncherApp
             restartCodex.Click += delegate { QueueManualAction(ui.T("Manual Codex restart"), delegate { RestartCodex("manual tray action"); }); };
             menu.Items.Add(restartCodex);
 
-            ToolStripMenuItem restartCc = new ToolStripMenuItem(ui.T("Restart CC Switch"));
-            restartCc.Click += delegate { QueueManualAction(ui.T("Manual CC Switch restart"), delegate { RestartCcSwitch(); }); };
-            menu.Items.Add(restartCc);
-
             ToolStripMenuItem ensureBridge = new ToolStripMenuItem(ui.T("Ensure Bridge Running"));
             ensureBridge.Click += delegate { QueueManualAction(ui.T("Ensure Bridge"), EnsureBridgeRunning); };
             menu.Items.Add(ensureBridge);
@@ -189,27 +177,6 @@ namespace CodexBridgeLauncherApp
                 UpdateStatusText(ui.T(paused ? "Paused" : "Watching provider switches"));
             };
             menu.Items.Add(pauseItem);
-
-            startupItem = new ToolStripMenuItem(ui.T("Start CodexBridge with Windows"));
-            startupItem.CheckOnClick = true;
-            startupItem.Checked = IsStartupRegistered();
-            startupItem.CheckedChanged += delegate
-            {
-                try
-                {
-                    SetStartupRegistration(startupItem.Checked);
-                    Log("Resident CodexBridge auto-start " + (startupItem.Checked ? "enabled." : "disabled."));
-                    Balloon(ui.T("Codex Bridge Launcher"), startupItem.Checked
-                        ? ui.T("Enabled. CodexBridge starts at Windows sign-in so Official conversations work even when CC Switch is closed.")
-                        : ui.T("Disabled. CodexBridge will no longer start automatically at Windows sign-in."), ToolTipIcon.Info);
-                }
-                catch (Exception ex)
-                {
-                    Log("ERROR changing autostart registration: " + ex);
-                    Balloon(ui.T("Codex Bridge Launcher"), ui.F("Could not change Windows startup setting: {0}", ex.Message), ToolTipIcon.Error);
-                }
-            };
-            menu.Items.Add(startupItem);
 
             ToolStripMenuItem openAppFolder = new ToolStripMenuItem(ui.T("Open Installed App Folder"));
             openAppFolder.Click += delegate { OpenFolder(installDir); };
@@ -241,7 +208,7 @@ namespace CodexBridgeLauncherApp
 
             menu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem exit = new ToolStripMenuItem(ui.T("Exit Everything..."));
+            ToolStripMenuItem exit = new ToolStripMenuItem(ui.T("Exit CodexBridge..."));
             exit.Click += delegate { ExitLauncher(); };
             menu.Items.Add(exit);
 
@@ -249,50 +216,6 @@ namespace CodexBridgeLauncherApp
             uninstall.Click += delegate { UninstallCodexBridge(); };
             menu.Items.Add(uninstall);
             return menu;
-        }
-
-        private string PreferredStartupExe()
-        {
-            string installedExe = Path.Combine(installDir, "CodexBridgeLauncher.exe");
-            if (File.Exists(installedExe)) return installedExe;
-            return Application.ExecutablePath;
-        }
-
-        private bool IsStartupRegistered()
-        {
-            try
-            {
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, false))
-                {
-                    if (key == null) return false;
-                    object raw = key.GetValue(StartupValueName);
-                    if (raw == null) return false;
-                    string value = raw.ToString() ?? "";
-                    string exe = PreferredStartupExe();
-                    return value.IndexOf(exe, StringComparison.OrdinalIgnoreCase) >= 0 &&
-                        value.IndexOf("--autostart", StringComparison.OrdinalIgnoreCase) >= 0;
-                }
-            }
-            catch { return false; }
-        }
-
-        private void SetStartupRegistration(bool enabled)
-        {
-            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(StartupRegistryPath))
-            {
-                if (key == null) throw new Exception("Could not open the current-user Startup registry key.");
-                if (enabled)
-                {
-                    string exe = PreferredStartupExe();
-                    key.SetValue(StartupValueName, "\"" + exe + "\" --autostart", RegistryValueKind.String);
-                    Program.StopCcSwitchWatcher();
-                }
-                else
-                {
-                    key.DeleteValue(StartupValueName, false);
-                    Program.StopCcSwitchWatcher();
-                }
-            }
         }
 
         private void OpenFolder(string path)
@@ -342,8 +265,6 @@ namespace CodexBridgeLauncherApp
                 pendingKey = "";
                 UpdateStatusText(ui.F("Route: {0}", FriendlyRoute(route)));
                 Log("Initial route: " + route.Key + ". No restart triggered.");
-                // A launcher started while a third-party route is already selected
-                // should also heal a previously closed CC Switch proxy.
                 SuperviseThirdPartyProxy(route);
                 return;
             }
@@ -352,11 +273,7 @@ namespace CodexBridgeLauncherApp
             {
                 pendingKey = "";
                 // A third-party route depends on the CC Switch proxy at :15721.
-                // Closing the CC Switch window/process should not silently make the
-                // current GLM/DeepSeek/Qwen route unusable. Keep the proxy healthy
-                // independently from route-change handling. Explicit Launcher Exit
-                // stops the timer first, so this supervisor never fights a deliberate
-                // full shutdown.
+                // Observe availability without controlling the upstream process.
                 SuperviseThirdPartyProxy(route);
                 return;
             }
@@ -386,10 +303,6 @@ namespace CodexBridgeLauncherApp
                     if (exiting) return;
                     if (string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
                     {
-                        RestartCcSwitch();
-                        if (exiting) return;
-                        Thread.Sleep(500);
-                        if (exiting) return;
                         RestartCodex("third-party route " + route.Model);
                     }
                     else
@@ -398,7 +311,7 @@ namespace CodexBridgeLauncherApp
                         if (exiting) return;
                         RestartCodex("Official route / ChatGPT account reload");
                     }
-                    Log("Switch handling complete. Bridge was not restarted.");
+                    Log("Switch handling complete. Bridge was not restarted; CC Switch remained under user control.");
                     Balloon(ui.T("Provider switch complete"), ui.F("{0} is ready. Bridge remained resident.", FriendlyRoute(route)), ToolTipIcon.Info);
                 }
                 catch (Exception ex)
@@ -464,7 +377,7 @@ namespace CodexBridgeLauncherApp
             {
                 if (exiting)
                 {
-                    Log("Skipping Bridge ensure because Exit Everything is in progress.");
+                    Log("Skipping Bridge ensure because Exit CodexBridge is in progress.");
                     return;
                 }
 
@@ -520,7 +433,7 @@ namespace CodexBridgeLauncherApp
                         try { p.Kill(); } catch { }
                         if (exiting)
                         {
-                            Log("Bridge manager startup was cancelled during Exit Everything.");
+                            Log("Bridge manager startup was cancelled during Exit CodexBridge.");
                             return;
                         }
                         throw new Exception("Bridge manager did not return within 60 seconds.");
@@ -534,7 +447,7 @@ namespace CodexBridgeLauncherApp
                     if (!string.IsNullOrEmpty(stderr)) Log("Bridge manager stderr:\r\n" + stderr);
                     if (exiting)
                     {
-                        Log("Bridge manager startup finished/cancelled during Exit Everything; ignoring its result.");
+                        Log("Bridge manager startup finished/cancelled during Exit CodexBridge; ignoring its result.");
                         return;
                     }
                     if (p.ExitCode != 0)
@@ -554,11 +467,11 @@ namespace CodexBridgeLauncherApp
                     try { p.Dispose(); } catch { }
                 }
 
-                // Exit Everything may be confirmed while a startup ensure that began earlier
+                // Exit CodexBridge may be confirmed while a startup ensure that began earlier
                 // is still waiting for the manager. Never let that stale ensure restart Codex.
                 if (exiting)
                 {
-                    Log("Bridge ensure completed during Exit Everything; skipping post-ensure Codex restart.");
+                    Log("Bridge ensure completed during Exit CodexBridge; skipping post-ensure Codex restart.");
                     return;
                 }
 
@@ -574,165 +487,30 @@ namespace CodexBridgeLauncherApp
         {
             if (route == null || !string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
                 return;
-            if (thirdPartyProxyRecoveryQueued || handling) return;
-            if (DateTime.UtcNow < nextThirdPartyProxyHealthUtc) return;
-            nextThirdPartyProxyHealthUtc = DateTime.UtcNow.AddSeconds(2);
-
-            if (TestTcpPort("127.0.0.1", 15721, 120)) return;
-
-            thirdPartyProxyRecoveryQueued = true;
-            handling = true;
-            UpdateStatusText(ui.F("Recovering CC Switch proxy for {0}...", route.Model));
-            Log("Third-party route is active but CC Switch proxy :15721 is unavailable; scheduling automatic recovery without changing provider/model.");
-            ThreadPool.QueueUserWorkItem(delegate
+            bool available = TestTcpPort("127.0.0.1", 15721, 120);
+            if (available)
             {
-                try
+                if (thirdPartyProxyUnavailable)
                 {
-                    if (exiting) return;
-                    EnsureCcSwitchProxyRunning();
-                    if (exiting) return;
-                    Log("Third-party CC Switch proxy recovery complete; route remains " + route.Key + ".");
+                    thirdPartyProxyUnavailable = false;
+                    Log("Third-party route recovered: CC Switch proxy :15721 is available again.");
                     Balloon(ui.T("CC Switch proxy restored"), ui.F("Third-party route {0} is available again.", route.Model), ToolTipIcon.Info);
                 }
-                catch (Exception ex)
-                {
-                    Log("ERROR recovering CC Switch proxy for active third-party route: " + ex);
-                    Balloon(ui.T("CC Switch proxy unavailable"), ui.T("Could not restore the third-party proxy automatically. Open CC Switch once or check Launcher Log."), ToolTipIcon.Error);
-                }
-                finally
-                {
-                    nextThirdPartyProxyHealthUtc = DateTime.UtcNow.AddSeconds(3);
-                    thirdPartyProxyRecoveryQueued = false;
-                    handling = false;
-                    UpdateStatusText(ui.F("Route: {0}", FriendlyRoute(route)));
-                }
-            });
-        }
-
-        private bool StartCcSwitchFromRememberedTarget()
-        {
-            string exe = GetState("cc_switch_exe");
-            string shortcut = GetState("cc_switch_shortcut");
-            bool started = false;
-            if (!IsRememberedCcSwitchExeValid(exe))
-            {
-                if (!string.IsNullOrEmpty(exe))
-                {
-                    Log("Discarding remembered CC Switch path because it is not a CC Switch executable: " + exe);
-                    SaveStateValue("cc_switch_exe", "");
-                }
-                exe = "";
-            }
-            if (!string.IsNullOrEmpty(exe)) started = StartDetached(exe, null);
-            if (!started)
-            {
-                string discovered = DiscoverCcSwitchExe();
-                if (!string.IsNullOrEmpty(discovered))
-                {
-                    SaveStateValue("cc_switch_exe", discovered);
-                    started = StartDetached(discovered, null);
-                }
-            }
-            if (!started)
-            {
-                string resolved = ResolveShortcutTarget(shortcut);
-                if (IsRememberedCcSwitchExeValid(resolved))
-                {
-                    SaveStateValue("cc_switch_exe", resolved);
-                    started = StartDetached(resolved, null);
-                }
-            }
-            if (!started && !string.IsNullOrEmpty(shortcut) && File.Exists(shortcut)) started = StartShell(shortcut);
-            if (!started)
-            {
-                string link = DiscoverShortcut("*CC*Switch*.lnk");
-                if (!string.IsNullOrEmpty(link))
-                {
-                    SaveStateValue("cc_switch_shortcut", link);
-                    string resolved = ResolveShortcutTarget(link);
-                    if (IsRememberedCcSwitchExeValid(resolved))
-                    {
-                        SaveStateValue("cc_switch_exe", resolved);
-                        started = StartDetached(resolved, null);
-                    }
-                    if (!started) started = StartShell(link);
-                }
-            }
-            return started;
-        }
-
-        private bool WaitForCcSwitchProxy(int timeoutMilliseconds)
-        {
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMilliseconds);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (TestTcpPort("127.0.0.1", 15721, 220)) return true;
-                Thread.Sleep(250);
-            }
-            return TestTcpPort("127.0.0.1", 15721, 220);
-        }
-
-        private void EnsureCcSwitchProxyRunning()
-        {
-            if (exiting) return;
-            if (TestTcpPort("127.0.0.1", 15721, 220)) return;
-
-            List<Process> processes = FindCcSwitchProcesses();
-            RememberCcSwitch(processes);
-
-            // The process can still be alive briefly while its proxy is coming up.
-            // Give it a short grace period before treating it as unhealthy.
-            if (processes.Count > 0 && WaitForCcSwitchProxy(2500))
-            {
-                Log("CC Switch process was already alive and proxy :15721 recovered without a restart.");
                 return;
             }
 
-            if (processes.Count > 0)
-            {
-                Log("CC Switch process exists but proxy :15721 is unavailable; restarting CC Switch for recovery.");
-                for (int i = 0; i < processes.Count; i++) KillProcessTree(processes[i].Id);
-                Thread.Sleep(600);
-            }
-            else
-            {
-                Log("CC Switch was closed while a third-party route remained active; relaunching it automatically.");
-            }
-
-            if (!StartCcSwitchFromRememberedTarget())
-                throw new Exception("Could not locate/relaunch CC Switch. Open CC Switch once so Codex Bridge can learn its executable path.");
-
-            if (!WaitForCcSwitchProxy(20000))
-                throw new Exception("CC Switch was relaunched, but proxy port 15721 did not become ready within 20 seconds.");
-
-            Log("CC Switch proxy ready on 127.0.0.1:15721.");
+            if (thirdPartyProxyUnavailable) return;
+            thirdPartyProxyUnavailable = true;
+            UpdateStatusText(ui.F("Third-party route unavailable: {0}", route.Model));
+            Log("Third-party route unavailable: CC Switch is not running or proxy :15721 is unavailable. CodexBridge will not start or restart CC Switch.");
+            Balloon(ui.T("CC Switch proxy unavailable"), ui.T("Third-party route unavailable: please open CC Switch."), ToolTipIcon.Warning);
         }
 
-        private void RestartCcSwitch()
+        private void RestartCodex(string reason, bool allowDuringExit = false)
         {
-            if (exiting)
+            if (exiting && !allowDuringExit)
             {
-                Log("Skipping CC Switch restart because Exit Everything is in progress.");
-                return;
-            }
-            Log("Restarting CC Switch for third-party route...");
-            List<Process> processes = FindCcSwitchProcesses();
-            RememberCcSwitch(processes);
-            for (int i = 0; i < processes.Count; i++) KillProcessTree(processes[i].Id);
-            Thread.Sleep(600);
-
-            if (!StartCcSwitchFromRememberedTarget())
-                throw new Exception("Could not locate/relaunch CC Switch. Open CC Switch once, then retry.");
-
-            if (WaitForCcSwitchProxy(20000)) Log("CC Switch proxy ready on 127.0.0.1:15721.");
-            else Log("WARNING CC Switch restarted but port 15721 was not ready after 20 seconds.");
-        }
-
-        private void RestartCodex(string reason)
-        {
-            if (exiting)
-            {
-                Log("Skipping Codex restart because Exit Everything is in progress: " + reason);
+                Log("Skipping Codex restart because Exit CodexBridge is in progress: " + reason);
                 return;
             }
             Log("Restarting Codex: " + reason);
@@ -783,6 +561,11 @@ namespace CodexBridgeLauncherApp
             Log("Codex backend terminated. VS Code/Cursor should recreate it on the next Codex interaction.");
         }
 
+        private void RestartCodexForExit()
+        {
+            RestartCodex("Official direct handoff before Bridge stop", true);
+        }
+
         private List<Process> FindCcSwitchProcesses()
         {
             List<Process> result = new List<Process>();
@@ -824,30 +607,6 @@ namespace CodexBridgeLauncherApp
             return IsCcSwitchName(fileName) || IsCcSwitchName(directoryName);
         }
 
-        private static bool IsRememberedCcSwitchExeValid(string path)
-        {
-            if (String.IsNullOrEmpty(path)) return false;
-            if (!File.Exists(path)) return false;
-            return IsCcSwitchExecutablePath(path);
-        }
-
-        private static string ResolveShortcutTarget(string shortcutPath)
-        {
-            try
-            {
-                if (String.IsNullOrEmpty(shortcutPath) || !File.Exists(shortcutPath)) return "";
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return "";
-                object shell = Activator.CreateInstance(shellType);
-                if (shell == null) return "";
-                object link = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { shortcutPath });
-                if (link == null) return "";
-                object target = link.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, link, null);
-                return target == null ? "" : target.ToString();
-            }
-            catch { return ""; }
-        }
-
         private List<Process> FindCodexProcesses()
         {
             List<Process> result = new List<Process>();
@@ -869,7 +628,6 @@ namespace CodexBridgeLauncherApp
 
         private void RememberLaunchTargets()
         {
-            RememberCcSwitch(FindCcSwitchProcesses());
             List<Process> codex = FindCodexProcesses();
             for (int i = 0; i < codex.Count; i++)
             {
@@ -885,93 +643,10 @@ namespace CodexBridgeLauncherApp
             }
         }
 
-        private void RememberCcSwitch(List<Process> processes)
-        {
-            for (int i = 0; i < processes.Count; i++)
-            {
-                string path = SafeProcessPath(processes[i]);
-                if (IsRememberedCcSwitchExeValid(path))
-                {
-                    SaveStateValue("cc_switch_exe", path);
-                    return;
-                }
-            }
-            string shortcut = DiscoverShortcut("*CC*Switch*.lnk");
-            if (!string.IsNullOrEmpty(shortcut))
-            {
-                SaveStateValue("cc_switch_shortcut", shortcut);
-                string resolved = ResolveShortcutTarget(shortcut);
-                if (IsRememberedCcSwitchExeValid(resolved)) SaveStateValue("cc_switch_exe", resolved);
-            }
-        }
-
         private static string SafeProcessPath(Process p)
         {
             try { return p.MainModule == null ? "" : p.MainModule.FileName; }
             catch { return ""; }
-        }
-
-        private string DiscoverCcSwitchExe()
-        {
-            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            List<string> candidates = new List<string>();
-            candidates.Add(Path.Combine(local, "Programs", "CC Switch", "CC Switch.exe"));
-            candidates.Add(Path.Combine(local, "Programs", "CCSwitch", "CCSwitch.exe"));
-            candidates.Add(Path.Combine(local, "Programs", "cc-switch", "cc-switch.exe"));
-            candidates.Add(Path.Combine(local, "CC Switch", "CC Switch.exe"));
-            candidates.Add(Path.Combine(local, "CCSwitch", "CCSwitch.exe"));
-            candidates.Add(Path.Combine(pf, "CC Switch", "CC Switch.exe"));
-            candidates.Add(Path.Combine(pf, "CCSwitch", "CCSwitch.exe"));
-            candidates.Add(Path.Combine(pf, "cc-switch", "cc-switch.exe"));
-            candidates.Add(Path.Combine(pf86, "CC Switch", "CC Switch.exe"));
-            candidates.Add(Path.Combine(pf86, "CCSwitch", "CCSwitch.exe"));
-            candidates.Add(Path.Combine(pf86, "cc-switch", "cc-switch.exe"));
-            // Portable installs such as D:\CCSwitch\cc-switch.exe are common, so probe the
-            // root of every fixed drive for the known CC Switch folder/file names.
-            try
-            {
-                DriveInfo[] drives = DriveInfo.GetDrives();
-                for (int i = 0; i < drives.Length; i++)
-                {
-                    try
-                    {
-                        if (drives[i].DriveType != DriveType.Fixed) continue;
-                        string root = drives[i].RootDirectory.FullName;
-                        candidates.Add(Path.Combine(root, "CCSwitch", "cc-switch.exe"));
-                        candidates.Add(Path.Combine(root, "CCSwitch", "CCSwitch.exe"));
-                        candidates.Add(Path.Combine(root, "CC Switch", "CC Switch.exe"));
-                        candidates.Add(Path.Combine(root, "cc-switch", "cc-switch.exe"));
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            for (int i = 0; i < candidates.Count; i++) if (File.Exists(candidates[i])) return candidates[i];
-            return "";
-        }
-
-        private static string DiscoverShortcut(string pattern)
-        {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-            string[] roots = new string[]
-            {
-                Path.Combine(appData, "Microsoft", "Windows", "Start Menu", "Programs"),
-                Path.Combine(programData, "Microsoft", "Windows", "Start Menu", "Programs")
-            };
-            for (int i = 0; i < roots.Length; i++)
-            {
-                try
-                {
-                    if (!Directory.Exists(roots[i])) continue;
-                    string[] links = Directory.GetFiles(roots[i], pattern, SearchOption.AllDirectories);
-                    if (links.Length > 0) return links[0];
-                }
-                catch { }
-            }
-            return "";
         }
 
         private static void KillProcessTree(int pid)
@@ -1004,22 +679,6 @@ namespace CodexBridgeLauncherApp
                 psi.WorkingDirectory = (!string.IsNullOrEmpty(executableDirectory) && Directory.Exists(executableDirectory))
                     ? executableDirectory
                     : launcherRuntimeDir;
-                Process.Start(psi);
-                return true;
-            }
-            catch { return false; }
-        }
-
-        private bool StartShell(string path)
-        {
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = path;
-                psi.UseShellExecute = true;
-                // A .lnk may define its own Start In directory. If it does not, use a
-                // launcher-owned runtime directory instead of inheriting the package cwd.
-                psi.WorkingDirectory = launcherRuntimeDir;
                 Process.Start(psi);
                 return true;
             }
@@ -1191,7 +850,7 @@ namespace CodexBridgeLauncherApp
         private void StopBridgeForUpdate()
         {
             // Serialize stop against any in-flight EnsureBridgeRunning call. This prevents
-            // an older startup ensure from finishing after Exit Everything and reviving the
+            // an older startup ensure from finishing after Exit CodexBridge and reviving the
             // Bridge or restarting Codex while shutdown is already in progress.
             lock (bridgeLifecycleSync)
             {
@@ -1218,6 +877,86 @@ namespace CodexBridgeLauncherApp
                 }
                 Log("Bridge stop command completed. Manager also scans for orphan codex_provider_bridge.py processes.");
             }
+        }
+
+        private void KillResidualBridgeProcesses()
+        {
+            string command = "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
+                "Where-Object { $_.CommandLine -match '(?i)codex_provider_bridge(?:\\.py)?' } | " +
+                "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = Program.PowerShellExePath();
+            psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"" + command.Replace("\"", "\\\"") + "\"";
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.WorkingDirectory = launcherRuntimeDir;
+            try
+            {
+                using (Process p = Process.Start(psi))
+                {
+                    if (p != null && !p.WaitForExit(5000))
+                    {
+                        Log("WARNING residual Bridge cleanup command timed out; killing cleanup process.");
+                        try { p.Kill(); } catch { }
+                    }
+                }
+                Log("Residual Bridge cleanup scan completed.");
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING residual Bridge cleanup scan failed: " + ex.Message);
+            }
+        }
+
+        private void StopBridgeForExit()
+        {
+            if (!File.Exists(managerScript))
+            {
+                Log("WARNING Bridge manager not found during Exit CodexBridge: " + managerScript);
+                return;
+            }
+
+            Log("Stopping resident Bridge for Exit CodexBridge (bounded path)...");
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = Program.PowerShellExePath();
+            psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + managerScript.Replace("\"", "\\\"") + "\" stop";
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.WorkingDirectory = launcherRuntimeDir;
+            Process manager = null;
+            try
+            {
+                manager = Process.Start(psi);
+                if (manager == null) throw new Exception("Could not start Bridge manager stop process.");
+                if (!manager.WaitForExit(12000))
+                {
+                    Log("WARNING Bridge manager stop timed out after 12 seconds; killing manager and entering residual cleanup fallback.");
+                    try { manager.Kill(); } catch { }
+                    try { manager.WaitForExit(2000); } catch { }
+                }
+                else
+                {
+                    Log("Bridge stop command completed during Exit CodexBridge.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING Bridge manager stop failed during Exit CodexBridge: " + ex.Message);
+            }
+            finally
+            {
+                if (manager != null) try { manager.Dispose(); } catch { }
+            }
+
+            KillResidualBridgeProcesses();
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline && TestTcpPort("127.0.0.1", 15722, 180)) Thread.Sleep(250);
+            if (TestTcpPort("127.0.0.1", 15722, 180))
+                Log("WARNING Bridge port :15722 is still listening after bounded cleanup.");
+            else
+                Log("Bridge port :15722 is no longer listening.");
         }
 
         private void PrepareDirectOfficialHandoff()
@@ -1259,17 +998,57 @@ namespace CodexBridgeLauncherApp
             List<Process> processes = FindCcSwitchProcesses();
             if (processes.Count == 0)
             {
-                Log("CC Switch was already stopped during Exit Everything.");
+                Log("CC Switch was already stopped during Exit CodexBridge.");
+                WaitForPortClosed("CC Switch", 15721, 4000);
                 return;
             }
 
-            Log("Stopping CC Switch during Exit Everything...");
+            Log("Stopping CC Switch during Exit CodexBridge (graceful then bounded force stop)...");
             for (int i = 0; i < processes.Count; i++)
             {
-                try { KillProcessTree(processes[i].Id); } catch { }
-                try { processes[i].Dispose(); } catch { }
+                try
+                {
+                    if (processes[i].MainWindowHandle != IntPtr.Zero) processes[i].CloseMainWindow();
+                }
+                catch { }
             }
-            Log("CC Switch stop completed.");
+
+            DateTime gracefulDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < gracefulDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
+            if (AnyProcessesAlive(processes))
+            {
+                Log("WARNING CC Switch graceful stop timed out; forcing remaining process trees.");
+                for (int i = 0; i < processes.Count; i++)
+                {
+                    try { if (!processes[i].HasExited) KillProcessTree(processes[i].Id); } catch { }
+                }
+            }
+            DateTime processDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < processDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
+            if (AnyProcessesAlive(processes))
+                Log("WARNING one or more CC Switch processes remain after bounded force stop.");
+            else
+                Log("CC Switch processes are no longer running.");
+            for (int i = 0; i < processes.Count; i++) try { processes[i].Dispose(); } catch { }
+            WaitForPortClosed("CC Switch", 15721, 5000);
+            Log("CC Switch stop completed during Exit CodexBridge.");
+        }
+
+        private static bool AnyProcessesAlive(List<Process> processes)
+        {
+            for (int i = 0; i < processes.Count; i++)
+            {
+                try { if (!processes[i].HasExited) return true; } catch { }
+            }
+            return false;
+        }
+
+        private void WaitForPortClosed(string name, int port, int timeoutMilliseconds)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMilliseconds);
+            while (DateTime.UtcNow < deadline && TestTcpPort("127.0.0.1", port, 180)) Thread.Sleep(200);
+            if (TestTcpPort("127.0.0.1", port, 180)) Log("WARNING " + name + " port :" + port + " is still listening after stop.");
+            else Log(name + " port :" + port + " is closed.");
         }
 
         private static bool IsTraditionalChineseUiCulture(string cultureName)
@@ -1297,27 +1076,24 @@ namespace CodexBridgeLauncherApp
             {
                 if (IsTraditionalChineseUiCulture(cultureName))
                 {
-                    title = "警告：徹底退出 CodexBridge？";
+                    title = "警告：退出 CodexBridge？";
                     body =
-                        "徹底退出將關閉 CodexBridge 和 CC Switch。\r\n" +
-                        "目前的 Codex 對話將暫時無法繼續。\r\n\r\n" +
+                        "這將關閉 CodexBridge、Bridge 和 CC Switch。\r\n\r\n" +
                         "重新開啟 CC Switch 後，CodexBridge 會自動啟動。";
                 }
                 else
                 {
-                    title = "警告：彻底退出 CodexBridge？";
+                    title = "警告：退出 CodexBridge？";
                     body =
-                        "彻底退出将关闭 CodexBridge 和 CC Switch。\r\n" +
-                        "当前 Codex 对话将暂时无法继续。\r\n\r\n" +
+                        "这将关闭 CodexBridge、Bridge 和 CC Switch。\r\n\r\n" +
                         "重新打开 CC Switch 后，CodexBridge 会自动启动。";
                 }
                 return;
             }
 
-            title = "Warning: Exit CodexBridge completely?";
+            title = "Warning: Exit CodexBridge?";
             body =
-                "This will close CodexBridge and CC Switch.\r\n" +
-                "Current Codex conversations will be temporarily unavailable.\r\n\r\n" +
+                "This will close CodexBridge, the Bridge, and CC Switch.\r\n\r\n" +
                 "Opening CC Switch later will automatically start CodexBridge again.";
         }
 
@@ -1434,7 +1210,7 @@ namespace CodexBridgeLauncherApp
             {
                 if (!p.HasExited)
                 {
-                    Log("Cancelling in-flight Bridge manager startup for Exit Everything.");
+                    Log("Cancelling in-flight Bridge manager startup for Exit CodexBridge.");
                     p.Kill();
                 }
             }
@@ -1444,15 +1220,64 @@ namespace CodexBridgeLauncherApp
             }
         }
 
-        private void PerformExitShutdown()
+        private void ClearDirectOfficialHandoffLatch()
         {
             try
             {
-                StopBridgeForUpdate();
+                string latch = Path.Combine(codexHome, "cpb-native-detach.flag");
+                if (File.Exists(latch)) File.Delete(latch);
+                Log("Direct Official handoff latch cleared.");
             }
             catch (Exception ex)
             {
-                Log("WARNING stopping Bridge during Exit Everything: " + ex.Message);
+                Log("WARNING could not clear direct Official handoff latch: " + ex.Message);
+            }
+        }
+
+        private void AbortExitAfterHandoffFailure(Exception error)
+        {
+            ClearDirectOfficialHandoffLatch();
+            exiting = false;
+            handling = false;
+            Log("Exit CodexBridge cancelled because Official handoff failed; Bridge was kept running: " + error.Message);
+            RunOnUiThread(delegate
+            {
+                try { tray.Visible = true; } catch { }
+                try { if (tray.ContextMenuStrip != null) tray.ContextMenuStrip.Enabled = true; } catch { }
+                try { pollTimer.Start(); } catch { }
+                Balloon(ui.T("Exit CodexBridge cancelled"), ui.T("Official handoff failed. Bridge remains running; no components were stopped."), ToolTipIcon.Error);
+            });
+        }
+
+        private void PerformExitShutdown()
+        {
+            RouteSnapshot route = ReadRouteSnapshot();
+            bool official = (route != null && string.Equals(route.Kind, "official", StringComparison.OrdinalIgnoreCase)) || IsCustomDirectOfficialRoute();
+            if (official)
+            {
+                try
+                {
+                    Log("Official Exit CodexBridge: preparing direct Official handoff before stopping Bridge.");
+                    PrepareDirectOfficialHandoff();
+                    if (!IsCustomDirectOfficialRoute())
+                        throw new Exception("Official handoff verification did not confirm custom.base_url=https://chatgpt.com/backend-api/codex.");
+                    RestartCodexForExit();
+                    Log("Official direct handoff verified and Codex restart completed; continuing shutdown.");
+                }
+                catch (Exception ex)
+                {
+                    AbortExitAfterHandoffFailure(ex);
+                    return;
+                }
+            }
+
+            try
+            {
+                StopBridgeForExit();
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING stopping Bridge during Exit CodexBridge: " + ex.Message);
             }
 
             try
@@ -1461,10 +1286,10 @@ namespace CodexBridgeLauncherApp
             }
             catch (Exception ex)
             {
-                Log("WARNING stopping CC Switch during Exit Everything: " + ex.Message);
+                Log("WARNING stopping CC Switch during Exit CodexBridge: " + ex.Message);
             }
 
-            Log("Exit Everything complete: tray launcher, resident Bridge, and CC Switch stopped. config.toml and Codex were left untouched; CC Switch trigger watcher remains armed for automatic relaunch.");
+            Log("Exit CodexBridge complete: full Launcher, resident Bridge, and CC Switch stopped; watcher remains armed for the next user-launched CC Switch.");
             FinalizeExitOnUiThread();
         }
 
@@ -1507,18 +1332,16 @@ namespace CodexBridgeLauncherApp
 
             if (answer != DialogResult.Yes)
             {
-                Log("Exit Everything cancelled by user.");
+                Log("Exit CodexBridge cancelled by user.");
                 return;
             }
 
-            // Explicit functional shutdown only. Do not rewrite config.toml, do not perform
-            // native-Official handoff, and do not restart Codex. Keep the lightweight CC Switch
-            // trigger watcher alive so opening CC Switch later can relaunch CodexBridge automatically.
-            // Leaving custom.base_url on :15722 preserves the exact compatibility path and avoids
-            // mutating conversation history.
+            // Explicit shutdown keeps the watcher alive. Official routes perform the existing
+            // direct handoff inside the shutdown worker before the Bridge is stopped; third-party
+            // routes stop without a handoff.
             exiting = true;
             try { pollTimer.Stop(); } catch { }
-            Log("Exit Everything confirmed. Cancelling startup work, then stopping Bridge and CC Switch in the background; config.toml and Codex will be left untouched; CC Switch trigger watcher remains armed.");
+            Log("Exit CodexBridge confirmed. Cancelling startup work, then performing bounded handoff/Bridge/CC Switch shutdown; watcher remains armed.");
 
             // Close the menu/tray immediately so the UI never appears hung while PowerShell or an
             // older startup ensure is winding down. The functional shutdown continues below on a
@@ -1618,7 +1441,7 @@ namespace CodexBridgeLauncherApp
         {
             string json = ReadTextFileSafe(statePath);
             if (string.IsNullOrEmpty(json)) return;
-            string[] keys = new string[] { "cc_switch_exe", "cc_switch_shortcut", "codex_gui_exe", "last_handled_route", "update_checked_at_utc", "latest_release_version", "latest_release_url" };
+            string[] keys = new string[] { "codex_gui_exe", "last_handled_route", "update_checked_at_utc", "latest_release_version", "latest_release_url" };
             for (int i = 0; i < keys.Length; i++)
             {
                 string v = JsonString(json, keys[i]);
@@ -1718,12 +1541,49 @@ namespace CodexBridgeLauncherApp
             catch { return string.Equals(a ?? "", b ?? "", StringComparison.OrdinalIgnoreCase); }
         }
 
-        private static void RegisterStableAutostart(string exePath)
+        internal static bool IsWatcherStartupRegistered()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, false))
+                {
+                    if (key == null) return false;
+                    object raw = key.GetValue(StartupValueName);
+                    string value = raw == null ? "" : raw.ToString() ?? "";
+                    return value.IndexOf("--watch-ccswitch", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        value.IndexOf("--autostart", StringComparison.OrdinalIgnoreCase) < 0;
+                }
+            }
+            catch { return false; }
+        }
+
+        private static void MigrateLegacyStartupRegistration(string exePath)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, false))
+                {
+                    if (key == null) return;
+                    object raw = key.GetValue(StartupValueName);
+                    string value = raw == null ? "" : raw.ToString() ?? "";
+                    if (value.IndexOf("--autostart", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        value.IndexOf("--watch-ccswitch", StringComparison.OrdinalIgnoreCase) >= 0) return;
+                }
+                RegisterWatcherAutostart(exePath);
+                StaticLauncherLog("Migrated legacy full Launcher Windows startup registration to --watch-ccswitch.");
+            }
+            catch (Exception ex)
+            {
+                StaticLauncherLog("WARNING could not migrate legacy Windows startup registration: " + ex.Message);
+            }
+        }
+
+        private static void RegisterWatcherAutostart(string exePath)
         {
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(StartupRegistryPath))
             {
                 if (key == null) throw new Exception("Could not open the current-user Startup registry key.");
-                key.SetValue(StartupValueName, "\"" + exePath + "\" --autostart", RegistryValueKind.String);
+                key.SetValue(StartupValueName, "\"" + exePath + "\" --watch-ccswitch", RegistryValueKind.String);
             }
         }
 
@@ -1881,8 +1741,8 @@ namespace CodexBridgeLauncherApp
                 CopyRuntimeFile(sourceDir, installDir, "CodexBridgeLauncher.ico", false);
                 CopyRuntimeFile(sourceDir, installDir, "codex_bridge_launcher.ps1", false);
                 CopyRuntimeFile(sourceDir, installDir, "UninstallCodexBridge.ps1", true);
-                StopCcSwitchWatcher();
-                RegisterStableAutostart(installedExe);
+                RegisterWatcherAutostart(installedExe);
+                EnsureCcSwitchWatcherRunning(installedExe);
                 RegisterWindowsUninstallEntry(installedExe, installDir);
 
                 ProcessStartInfo psi = new ProcessStartInfo();
@@ -1891,7 +1751,7 @@ namespace CodexBridgeLauncherApp
                 psi.UseShellExecute = true;
                 psi.WorkingDirectory = installDir;
                 Process.Start(psi);
-                EmergencyLog("Installed/updated stable launcher at " + installDir + "; resident Windows autostart enabled; relaunched installed copy.");
+                EmergencyLog("Installed/updated stable launcher at " + installDir + "; CC Switch watcher startup registered; relaunched installed copy.");
                 return true;
             }
             catch (Exception ex)
@@ -2039,16 +1899,24 @@ namespace CodexBridgeLauncherApp
                 using (EventWaitHandle stop = new EventWaitHandle(false, EventResetMode.AutoReset, CcSwitchWatcherStopEventName))
                 {
                     string exePath = Application.ExecutablePath;
-                    StaticLauncherLog("CC Switch trigger watcher started. It will launch Codex Bridge when CC Switch is running.");
-                    DateTime lastLaunchAttemptUtc = DateTime.MinValue;
+                    StaticLauncherLog("CC Switch trigger watcher started. It launches CodexBridge only on a CC Switch start edge.");
+                    bool previousCcSwitchRunning = false;
+                    bool launchAttemptedForRun = false;
                     while (true)
                     {
                         if (stop.WaitOne(700)) break;
-                        if (!IsCcSwitchRunning()) continue;
-                        if (IsFullLauncherRunning()) continue;
-                        if ((DateTime.UtcNow - lastLaunchAttemptUtc).TotalSeconds < 3) continue;
-                        lastLaunchAttemptUtc = DateTime.UtcNow;
-                        LaunchFullLauncherFromWatcher(exePath);
+                        bool currentCcSwitchRunning = IsCcSwitchRunning();
+                        if (!currentCcSwitchRunning)
+                        {
+                            launchAttemptedForRun = false;
+                        }
+                        else if (currentCcSwitchRunning && !previousCcSwitchRunning && !launchAttemptedForRun)
+                        {
+                            launchAttemptedForRun = true;
+                            if (!IsFullLauncherRunning()) LaunchFullLauncherFromWatcher(exePath);
+                            else StaticLauncherLog("CC Switch start edge observed while full Launcher is already running.");
+                        }
+                        previousCcSwitchRunning = currentCcSwitchRunning;
                     }
                     StaticLauncherLog("CC Switch trigger watcher stopped.");
                 }
@@ -2111,6 +1979,13 @@ namespace CodexBridgeLauncherApp
         {
             if (ScheduleSelfRebuildIfNeeded()) return;
             if (InstallAndRelaunchIfNeeded(args)) return;
+            MigrateLegacyStartupRegistration(Application.ExecutablePath);
+            if (HasArg(args, "--autostart"))
+            {
+                MigrateLegacyStartupRegistration(Application.ExecutablePath);
+                RunCcSwitchWatcher();
+                return;
+            }
             if (HasArg(args, "--watch-ccswitch"))
             {
                 RunCcSwitchWatcher();
@@ -2131,7 +2006,7 @@ namespace CodexBridgeLauncherApp
             Mutex mutex = new Mutex(true, FullLauncherMutexName, out createdNew);
             if (!createdNew)
             {
-                if (!HasArg(args, "--ccswitch-trigger") && !HasArg(args, "--autostart"))
+                if (!HasArg(args, "--ccswitch-trigger"))
                 {
                     LauncherUiText text = new LauncherUiText();
                     MessageBox.Show(text.T("Codex Bridge Launcher is already running in the system tray."), text.T("Codex Bridge Launcher"), MessageBoxButtons.OK, MessageBoxIcon.Information);

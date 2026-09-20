@@ -48,12 +48,13 @@ class QuickStartPathContractTests(unittest.TestCase):
         self.assertIn("CodexProviderBridge\\runtime\\python\\python.exe", text)
         self.assertIn("$env:CPB_PYTHON", text)
 
-    def test_launcher_registers_resident_windows_autostart(self):
+    def test_launcher_registers_only_ccswitch_watcher_at_windows_login(self):
         text = (ROOT / "src" / "launcher" / "CodexBridgeLauncher.cs").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn("--autostart", text)
-        self.assertIn("RegisterStableAutostart", text)
+        self.assertIn("--watch-ccswitch", text)
+        self.assertIn("RegisterWatcherAutostart", text)
+        self.assertNotIn('key.SetValue(StartupValueName, "\\\"" + exePath + "\\\" --autostart"', text)
         self.assertIn('private const string LauncherVersion = "', text)
 
 

@@ -12,6 +12,13 @@ CodexBridge follows semantic public release versions from the repository-root `V
 - Added a fallback update check through the public `releases/latest` redirect when the GitHub REST API is blocked or rate-limited; the redirect path does not consume the unauthenticated API quota.
 - The manual "could not check for updates" message now states that a proxy or firewall blocking `api.github.com` is the usual cause.
 
+### Lifecycle
+
+- Windows login now starts only the CC Switch watcher; legacy full-Launcher `--autostart` registrations migrate automatically.
+- Third-party proxy supervision is observation-only: CodexBridge no longer launches, restarts, or kills CC Switch automatically.
+- `Exit CodexBridge` now performs bounded Bridge/CC Switch shutdown, Official direct handoff verification, and retains the watcher for the next user-launched CC Switch.
+- macOS login now keeps only the watcher LaunchAgent; the watcher opens the full app on a CC Switch start edge and never starts or restarts CC Switch.
+
 ## [0.1.5] - 2026-09-20
 
 ### Fixed

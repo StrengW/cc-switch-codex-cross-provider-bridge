@@ -315,7 +315,7 @@ namespace CodexBridgeSetupApp
             File.WriteAllText(Path.Combine(RootDir(), "installed-version.txt"), SetupVersion + Environment.NewLine, new UTF8Encoding(false));
         }
 
-        private static void Install(bool registerAutostart, bool launchAfterInstall)
+        private static void Install(bool registerWatcher, bool launchAfterInstall)
         {
             string root = RootDir();
             string appDir = AppDir();
@@ -340,11 +340,11 @@ namespace CodexBridgeSetupApp
                 CopyDirectory(stagingDir, appDir);
 
                 string installedLauncher = Path.Combine(appDir, "CodexBridgeLauncher.exe");
-                if (registerAutostart) RegisterWatcherAutostart(installedLauncher);
+                if (registerWatcher) RegisterWatcherAutostart(installedLauncher);
                 RegisterWindowsUninstallEntry(installedLauncher, appDir);
                 WriteVersionMarker();
                 if (launchAfterInstall) StartInstalled(installedLauncher, appDir);
-                Log("Install/update complete. app=" + appDir + "; autostart=" + registerAutostart + "; launched=" + launchAfterInstall + ".");
+                Log("Install/update complete. app=" + appDir + "; watcher_startup=" + registerWatcher + "; launched=" + launchAfterInstall + ".");
             }
             finally
             {
@@ -357,7 +357,6 @@ namespace CodexBridgeSetupApp
         {
             bool silent = HasArg(args, "--silent");
             bool noLaunch = HasArg(args, "--no-launch");
-            bool noAutostart = HasArg(args, "--no-autostart");
             string requestedRoot = ArgValue(args, "--root");
             if (!string.IsNullOrWhiteSpace(requestedRoot)) rootOverride = Path.GetFullPath(requestedRoot.Trim().Trim('"'));
 
@@ -376,11 +375,11 @@ namespace CodexBridgeSetupApp
                 try
                 {
                     ValidateEnvironment();
-                    Install(!noAutostart, !noLaunch);
+                    Install(true, !noLaunch);
                     if (!silent)
                     {
                         MessageBox.Show(
-                            "Codex Bridge is installed and running.\r\n\r\nFrom now on, use CC Switch normally. If a third-party route is active and the CC Switch proxy is closed, Codex Bridge will restore it automatically. The lightweight watcher also brings the launcher back when CC Switch opens.",
+                            "Codex Bridge is installed and running.\r\n\r\nWindows login starts only the lightweight CC Switch watcher. Use CC Switch normally; when it opens, the watcher starts CodexBridge. Third-party routes depend on CC Switch, and CodexBridge never launches or restarts it automatically.",
                             "Codex Bridge Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     Environment.ExitCode = 0;

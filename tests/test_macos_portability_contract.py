@@ -14,7 +14,7 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertTrue(plist.is_file())
         source_text = source.read_text(encoding="utf-8")
         plist_text = plist.read_text(encoding="utf-8")
-        for token in ("import AppKit", "NSStatusItem", "NSMenu", "Process", "Unknown", "Exit Everything", "Uninstall CodexBridge"):
+        for token in ("import AppKit", "NSStatusItem", "NSMenu", "Process", "Unknown", "Exit CodexBridge", "Uninstall CodexBridge"):
             self.assertIn(token, source_text)
         self.assertIn("com.strengw.codexbridge.launcher", plist_text)
         self.assertIn("LSUIElement", plist_text)
@@ -41,7 +41,7 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('CPB_VERSION=', text)
         self.assertIn('restart) stop_bridge', text)
         self.assertIn('restart-codex)', text)
-        self.assertIn('restart-cc-switch)', text)
+        self.assertNotIn('restart-cc-switch)', text)
         self.assertIn('Library/Application Support/CodexProviderBridge', text)
 
     def test_double_click_macos_entrypoint_is_location_independent(self):
@@ -146,21 +146,23 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('gh release upload "$tag" "${assets[@]}"', text)
         self.assertGreaterEqual(text.count('--repo "$GITHUB_REPOSITORY"'), 2)
 
-    def test_macos_watcher_automates_provider_switch_restart_policy(self):
+    def test_macos_watcher_only_triggers_full_app_on_ccswitch_edge(self):
         text = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")
-        self.assertIn('route_kind', text)
-        self.assertIn('restart_cc_switch', text)
-        self.assertIn('restart_codex', text)
-        self.assertIn('third-party', text)
-        self.assertIn('official', text)
-        self.assertIn('Initial resident route', text)
-        self.assertIn('restoring proxy without restarting Codex', text)
+        self.assertIn('launch_full_launcher', text)
+        self.assertIn('previous_cc_switch_running', text)
+        self.assertIn('launch_attempted_for_run', text)
+        self.assertIn('CC Switch start edge', text)
+        self.assertNotIn('ensure_bridge_started', text)
+        self.assertNotIn('restart_cc_switch', text)
+        self.assertNotIn('restart_codex', text)
+        manager = (ROOT / "scripts" / "unix" / "codex_bridge_manager.sh").read_text(encoding="utf-8-sig")
+        self.assertIn('restart_codex()', manager)
 
     def test_macos_bootstrap_installs_launcher_without_replacing_watcher(self):
         start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
         self.assertIn("CodexBridge.app", start)
-        self.assertIn("com.strengw.codexbridge.launcher.plist", start)
         self.assertIn("com.strengw.codexbridge.watcher.plist", start)
+        self.assertIn("legacy full-app login agent", start)
         self.assertIn("open", start)
         self.assertIn("codex_bridge_uninstall.sh", start)
 

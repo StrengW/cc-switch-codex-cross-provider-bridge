@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 # Codex Cross-Provider Bridge manager for Linux/macOS/WSL Bash.
@@ -28,6 +28,7 @@ CPB_LISTEN_ADDRESS="127.0.0.1"
 CPB_BRIDGE_PORT=15722
 CPB_UPSTREAM_URL="http://127.0.0.1:15721"
 CPB_RESPONSES_WS_UPSTREAM_URL="${CPB_RESPONSES_WS_UPSTREAM_URL:-https://chatgpt.com/backend-api/codex}"
+CPB_DIRECT_OFFICIAL_BASE_URL="https://chatgpt.com/backend-api/codex"
 CPB_PROVIDER_ID="custom"
 CPB_PROVIDER_NAME="OpenAI"
 CPB_OFFICIAL_PROVIDER_ID="cc-switch-official"
@@ -52,7 +53,7 @@ CPB_REALTIME_WEBRTC_CALL_BASE_URL="${CPB_REALTIME_WEBRTC_CALL_BASE_URL:-https://
 usage() {
     cat <<'EOF'
 Usage:
-  codex_bridge_manager.sh [auto|start|restart|restart-codex|restart-cc-switch|repair|status|doctor|stop] [options]
+  codex_bridge_manager.sh [auto|start|restart|restart-codex|repair|prepare-direct-official|status|doctor|stop] [options]
 
 Commands:
   auto      Start only for the official/bridge Codex config (default)
@@ -60,9 +61,10 @@ Commands:
   restart   Stop and start the managed bridge using the same start options
   restart-codex
             Delegate Codex backend restart to the existing macOS watcher action
-  restart-cc-switch
-            Delegate CC Switch restart to the existing macOS watcher action
   repair    Apply bridge config without selecting a CC Switch provider
+  prepare-direct-official
+            Keep model_provider=custom and point custom directly to the
+            Official ChatGPT Codex backend before a deliberate Bridge stop
   status    Show bridge, upstream, config, and process status
   doctor    Check prerequisites and machine-specific paths without changing them
   stop      Stop only the bridge process managed by this script
@@ -216,7 +218,7 @@ parse_args() {
     done
 
     case "$CPB_COMMAND" in
-        auto|start|restart|restart-codex|restart-cc-switch|repair|status|doctor|stop) ;;
+        auto|start|restart|restart-codex|repair|prepare-direct-official|status|doctor|stop) ;;
         *) die "Unknown command: $CPB_COMMAND" ;;
     esac
     validate_config
@@ -625,7 +627,183 @@ stop_bridge() {
         stopped=1
     done < <(ps -eo pid=,args= 2>/dev/null | awk '/codex_provider_bridge\.py/ && !/awk/ {print $1}')
     rm -f -- "$CPB_STATE_FILE"
+    # Release the read-only handoff latch only after every resident interpreter
+    # is gone.  While it exists, the Bridge catalog guard must not repin the
+    # custom provider back to the local port during Exit CodexBridge.
+    rm -f -- "$(dirname -- "$CPB_CODEX_CONFIG")/cpb-native-detach.flag"
     ((stopped)) || printf 'No resident bridge process was found.\n'
+}
+
+restart_codex() {
+    mkdir -p "$CPB_STATE_DIR"
+    printf '%s Restarting Codex backend\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$CPB_STATE_DIR/macos-watcher.log"
+    # This is an explicit full-Launcher action. The lightweight watcher never
+    # invokes it and never observes route/config state.
+    pkill -TERM -f '(^|/|[[:space:]])codex([[:space:]]|$)|OpenAI/Codex' >/dev/null 2>&1 || true
+    sleep 0.8
+    printf '%s Codex backend terminated; VS Code/Cursor/Codex host will recreate it on next interaction.\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" >>"$CPB_STATE_DIR/macos-watcher.log"
+}
+
+prepare_direct_official() {
+    resolve_python
+    local config_directory flag_path
+    config_directory="$(dirname -- "$CPB_CODEX_CONFIG")"
+    flag_path="$config_directory/cpb-native-detach.flag"
+    mkdir -p "$config_directory"
+
+    # Arm the Bridge's read-only latch before touching config.toml.  This is
+    # deliberately the first mutation so its 250 ms reconciliation loop cannot
+    # race the direct Official handoff.
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$flag_path"
+    sleep 0.35
+
+    if ! CPB_CONFIG="$CPB_CODEX_CONFIG" \
+        CPB_DIRECT_BASE="$CPB_DIRECT_OFFICIAL_BASE_URL" \
+        CPB_BUNDLED_CATALOG="$config_directory/cpb-bundled-model-catalog.json" \
+        "$CPB_PYTHON" - <<'PY'
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import tempfile
+from pathlib import Path
+
+path = Path(os.environ["CPB_CONFIG"])
+base_url = os.environ["CPB_DIRECT_BASE"]
+catalog = Path(os.environ["CPB_BUNDLED_CATALOG"])
+if not path.exists():
+    raise SystemExit(f"Codex config was not found: {path}")
+
+original = path.read_text(encoding="utf-8")
+newline = "\r\n" if "\r\n" in original else "\n"
+had_final_newline = original.endswith(("\n", "\r"))
+lines = original.splitlines()
+
+def quote(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+def first_section_index(items: list[str]) -> int:
+    for index, line in enumerate(items):
+        if re.match(r"^\s*\[", line):
+            return index
+    return len(items)
+
+def set_top_level(items: list[str], key: str, value: str) -> None:
+    end = first_section_index(items)
+    pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
+    for index in range(end):
+        if pattern.search(items[index]):
+            items[index] = f"{key} = {value}"
+            return
+    items.insert(end, f"{key} = {value}")
+
+def section_bounds(items: list[str], header: re.Pattern[str]):
+    start = None
+    for index, line in enumerate(items):
+        if header.match(line):
+            start = index
+            break
+    if start is None:
+        return None
+    end = len(items)
+    for index in range(start + 1, len(items)):
+        if re.match(r"^\s*\[", items[index]):
+            end = index
+            break
+    return start, end
+
+def set_section_key(items: list[str], header: re.Pattern[str], new_header: str,
+                    key: str, value: str) -> None:
+    bounds = section_bounds(items, header)
+    if bounds is None:
+        if items and items[-1].strip():
+            items.append("")
+        items.extend([new_header, f"{key} = {value}"])
+        return
+    start, end = bounds
+    pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
+    for index in range(start + 1, end):
+        if pattern.search(items[index]):
+            items[index] = f"{key} = {value}"
+            return
+    items.insert(end, f"{key} = {value}")
+
+def remove_section_key(items: list[str], header: re.Pattern[str], key: str) -> None:
+    bounds = section_bounds(items, header)
+    if bounds is None:
+        return
+    start, end = bounds
+    pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
+    items[start + 1:end] = [line for line in items[start + 1:end] if not pattern.search(line)]
+
+custom_header = re.compile(r'^\s*\[model_providers\.(?:custom|"custom")\]\s*$')
+set_top_level(lines, "model_provider", quote("custom"))
+if catalog.is_file():
+    set_top_level(lines, "model_catalog_json", quote(str(catalog)))
+set_section_key(lines, custom_header, "[model_providers.custom]", "name", quote("OpenAI"))
+set_section_key(lines, custom_header, "[model_providers.custom]", "base_url", quote(base_url))
+set_section_key(lines, custom_header, "[model_providers.custom]", "wire_api", quote("responses"))
+set_section_key(lines, custom_header, "[model_providers.custom]", "requires_openai_auth", "true")
+set_section_key(lines, custom_header, "[model_providers.custom]", "supports_websockets", "true")
+remove_section_key(lines, custom_header, "experimental_bearer_token")
+
+updated = newline.join(lines)
+if had_final_newline:
+    updated += newline
+if updated != original:
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+    backup = path.with_name(path.name + ".bridge-direct-official-backup-" + stamp)
+    shutil.copy2(path, backup)
+    fd, temporary_name = tempfile.mkstemp(prefix="." + path.name + ".bridge-direct-official-tmp-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+    print(f"Direct Official config updated: {path}")
+    print(f"Backup created: {backup}")
+else:
+    print(f"Direct Official config already prepared: {path}")
+PY
+    then
+        rm -f -- "$flag_path"
+        die 'Direct Official handoff failed while updating config.toml.'
+    fi
+
+    if ! CPB_CONFIG="$CPB_CODEX_CONFIG" CPB_DIRECT_BASE="$CPB_DIRECT_OFFICIAL_BASE_URL" "$CPB_PYTHON" - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ["CPB_CONFIG"])
+expected = os.environ["CPB_DIRECT_BASE"].rstrip("/")
+text = path.read_text(encoding="utf-8")
+top = text.split("[", 1)[0]
+provider = re.search(r'^\s*model_provider\s*=\s*["\']([^"\']+)["\']', top, re.M)
+section = re.search(r'^\s*\[model_providers\.(?:custom|"custom")\]\s*$([\s\S]*?)(?=^\s*\[|\Z)', text, re.M)
+base = re.search(r'^\s*base_url\s*=\s*["\']([^"\']+)["\']', section.group(1), re.M) if section else None
+provider_value = provider.group(1) if provider else ""
+base_value = base.group(1).rstrip("/") if base else ""
+if provider_value != "custom" or base_value != expected:
+    raise SystemExit(f"Direct Official handoff verification failed: model_provider={provider_value!r}; base_url={base_value!r}")
+print(f"Direct Official handoff verified: model_provider=custom; base_url={expected}")
+PY
+    then
+        rm -f -- "$flag_path"
+        die 'Direct Official handoff verification failed.'
+    fi
 }
 
 
@@ -1232,13 +1410,9 @@ main() {
         auto) automatic_bridge ;;
         start) start_bridge ;;
         restart) stop_bridge; CPB_FOREGROUND=0; start_bridge ;;
-        restart-codex)
-            [[ -x "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" ]] || die 'macOS watcher script was not found.'
-            /bin/bash "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" restart-codex ;;
-        restart-cc-switch)
-            [[ -x "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" ]] || die 'macOS watcher script was not found.'
-            /bin/bash "$CPB_SCRIPT_DIR/codex_bridge_watcher.sh" restart-cc-switch ;;
+        restart-codex) restart_codex ;;
         repair) repair_config ;;
+        prepare-direct-official) prepare_direct_official ;;
         status) show_status ;;
         doctor) show_doctor ;;
         stop) stop_bridge ;;

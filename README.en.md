@@ -95,7 +95,7 @@ macOS is currently **Beta**. The Release is not yet Apple Developer signed/notar
 
 If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
 
-After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Its menu exposes status and route information, Bridge/Codex/CC Switch restart actions, logs, launcher-at-login, full exit, and uninstall. These actions reuse the existing backend scripts; the watcher and menu bar UI use separate LaunchAgents. Closing the UI does not stop the background Bridge; only the confirmed `Exit Everything...` action stops background services.
+After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Login starts only the lightweight watcher; when the user opens CC Switch, the watcher starts the CodexBridge menu bar app and Bridge. CodexBridge never launches or restarts CC Switch automatically. Closing the UI does not stop the background Bridge; confirmed `Exit CodexBridge...` stops the full Launcher, Bridge, and CC Switch while keeping the watcher.
 
 ## Everyday use (Windows)
 
@@ -103,12 +103,11 @@ After startup, CodexBridge stays in the Windows system tray. Right-click the tra
 
 - **Status: ...**: view the current runtime status.
 - **Restart Codex**: restart Codex manually.
-- **Restart CC Switch**: restart CC Switch manually.
 - **Ensure Bridge Running**: check and recover the Bridge.
 - **Pause automatic restarts**: temporarily pause automatic restart handling.
-- **Start CodexBridge with Windows**: enable or disable launch at Windows sign-in.
+- **CC Switch watcher**: only the watcher starts at Windows sign-in; it launches full CodexBridge on a CC Switch not-running→running edge. This behavior is not user-toggleable.
 - **Open Installed App Folder / Open ... Log / Open Log Folder**: open the install directory or logs.
-- **Exit Everything...**: stop CodexBridge, the Bridge, and CC Switch. This does not uninstall CodexBridge, rewrite `config.toml`, or restart Codex. A lightweight watcher remains armed, so opening CC Switch later starts CodexBridge again.
+- **Exit CodexBridge...**: stop the full Launcher, Bridge, and CC Switch. Official routes first hand off `custom` to the direct Official backend; third-party routes stop the Bridge directly. The watcher remains armed, so opening CC Switch later starts CodexBridge again.
 - **Uninstall CodexBridge...**: completely uninstall CodexBridge.
 
 Double-clicking the tray icon opens the log folder directly.
@@ -127,7 +126,7 @@ You can also double-click this file from the repository or Release package:
 Uninstall CodexBridge.cmd
 ```
 
-Uninstall stops the Bridge and CC Switch, removes CodexBridge's local program files, runtime, logs, startup registration, and watcher, and restores the pre-install Codex configuration when available. If a complete pre-install snapshot is unavailable, Codex falls back to the direct Official route.
+Uninstall stops the Bridge and CC Switch, stops/removes the watcher registration, removes CodexBridge's local program files, runtime, and logs, and restores the pre-install Codex configuration when available. If a complete pre-install snapshot is unavailable, Codex falls back to the direct Official route.
 
 **Your Codex chat history is not deleted.**
 
@@ -135,7 +134,7 @@ Uninstall stops the Bridge and CC Switch, removes CodexBridge's local program fi
 
 - **Keeps one conversation usable** across Official ↔ DeepSeek / GLM / Qwen switches whenever possible.
 - **Handles tool/reasoning incompatibilities** with a safe fallback instead of immediately breaking the conversation.
-- **Automates switching work** such as routing, provider-scoped model lists, and required Codex / CC Switch restarts.
+- **Automates switching work** such as routing, provider-scoped model lists, and required Codex restarts; unavailable third-party routes ask the user to open CC Switch instead of launching it.
 - **Does not rewrite saved chat history** in `.codex/sessions`, Codex SQLite history, or `.codex/auth.json`.
 - **Runs in the background after setup**, so normal use does not require manual `config.toml` edits or starting the Bridge by hand.
 

@@ -10,8 +10,6 @@ PY_ROOT="$RUNTIME_ROOT/python"
 LOG="$STATE_ROOT/start.log"
 PLIST="$HOME/Library/LaunchAgents/com.strengw.codexbridge.watcher.plist"
 LAUNCHER_APP="$APP_ROOT/CodexBridge.app"
-LAUNCHER_PLIST="$HOME/Library/LaunchAgents/com.strengw.codexbridge.launcher.plist"
-LAUNCHER_DISABLED="$STATE_ROOT/launcher-disabled"
 
 mkdir -p "$STATE_ROOT" "$APP_ROOT" "$RUNTIME_ROOT" "$(dirname -- "$PLIST")"
 exec > >(tee -a "$LOG") 2>&1
@@ -135,37 +133,14 @@ install_launcher_app() {
   return 1
 }
 
-install_launcher_agent() {
-  local run_at_load=true
-  [[ -f "$LAUNCHER_DISABLED" ]] && run_at_load=false
-  cat > "$LAUNCHER_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.strengw.codexbridge.launcher</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/open</string>
-    <string>$LAUNCHER_APP</string>
-  </array>
-  <key>RunAtLoad</key><$([[ "$run_at_load" == true ]] && echo true || echo false)/>
-  <key>ProcessType</key><string>Interactive</string>
-  <key>StandardOutPath</key><string>$STATE_ROOT/launcher.log</string>
-  <key>StandardErrorPath</key><string>$STATE_ROOT/launcher.log</string>
-</dict>
-</plist>
-EOF
-  /bin/launchctl bootout "gui/$UID" "$LAUNCHER_PLIST" >/dev/null 2>&1 || true
-  /bin/launchctl bootstrap "gui/$UID" "$LAUNCHER_PLIST" >/dev/null 2>&1 || true
-}
-
 copy_runtime_files
 PYTHON_PATH="$(ensure_python)"
 python_ok "$PYTHON_PATH" || { echo "[CodexBridge] Python runtime setup failed. See: $LOG"; read -r -p "Press Enter to close..." _ || true; exit 1; }
 install_launch_agent
 if install_launcher_app; then
-  install_launcher_agent
+  # Remove the legacy full-app login agent; login must start only the watcher.
+  /bin/launchctl bootout "gui/$UID" "$HOME/Library/LaunchAgents/com.strengw.codexbridge.launcher.plist" >/dev/null 2>&1 || true
+  rm -f -- "$HOME/Library/LaunchAgents/com.strengw.codexbridge.launcher.plist"
 fi
 
 # Start immediately even if launchctl has not scheduled the agent yet.
@@ -175,11 +150,8 @@ else
   nohup /bin/bash "$APP_ROOT/codex_bridge_watcher.sh" >>"$STATE_ROOT/macos-watcher.log" 2>&1 </dev/null &
 fi
 
-# Convenience only: first run tries to open CC Switch if it is installed.
-if ! pgrep -if 'CC[ _-]*Switch|CCSwitch' >/dev/null 2>&1; then
-  /usr/bin/open -a "CC Switch" >/dev/null 2>&1 || /usr/bin/open -a "CCSwitch" >/dev/null 2>&1 || true
-fi
-
+# Opening CodexBridge.app below is an explicit user action; the watcher itself
+# never starts CC Switch and login continues to start only the watcher agent.
 /usr/bin/osascript -e 'display notification "Codex Bridge is ready and will stay available even when CC Switch is closed." with title "Codex Bridge"' >/dev/null 2>&1 || true
 if [[ -x "$LAUNCHER_APP/Contents/MacOS/CodexBridge" ]]; then
   /usr/bin/open "$LAUNCHER_APP" >/dev/null 2>&1 || echo "[CodexBridge] Could not open menu bar app; see $STATE_ROOT/launcher.log" >&2
