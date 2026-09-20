@@ -31,6 +31,15 @@ def test_windows_update_prompt_can_open_release_page_without_auto_replacing_runt
     assert "InstallAndRelaunchIfNeeded" not in checker
 
 
+def test_windows_update_checker_enables_tls12_for_github():
+    checker = (ROOT / "src" / "launcher" / "ReleaseUpdateChecker.cs").read_text(encoding="utf-8-sig")
+
+    assert "EnsureModernTls" in checker
+    assert "ServicePointManager.SecurityProtocol" in checker
+    assert "SecurityProtocolType.Tls12" in checker
+    assert checker.index("EnsureModernTls();") < checker.index("WebRequest.Create(ApiUrl)")
+
+
 def test_windows_source_release_package_contains_launcher_support_files():
     package = (ROOT / "scripts" / "build" / "BuildWindowsReleasePackage.ps1").read_text(encoding="utf-8-sig")
 

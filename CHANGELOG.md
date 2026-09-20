@@ -2,6 +2,13 @@
 
 CodexBridge follows semantic public release versions from the repository-root `VERSION` file. Internal component revision labels that may appear in diagnostic logs are implementation markers, not public release versions.
 
+## [0.1.6] - 2026-09-20
+
+### Fixed
+
+- The Windows update check now enables TLS 1.2 before contacting GitHub. The launcher is compiled without an `app.config`, so the runtime treated it as a .NET 4.0 application whose default `ServicePointManager.SecurityProtocol` was `Ssl3, Tls` only; GitHub requires TLS 1.2, so "Check for Updates..." failed with `SecureChannelFailure` ("could not create SSL/TLS secure channel").
+- Added a regression contract that fails if the TLS 1.2 opt-in is removed or moved after the request is created.
+
 ## [0.1.5] - 2026-09-20
 
 ### Fixed

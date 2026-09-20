@@ -40,6 +40,7 @@ namespace CodexBridgeLauncherApp
         {
             try
             {
+                EnsureModernTls();
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(ApiUrl);
                 request.Method = "GET";
                 request.Accept = "application/vnd.github+json";
@@ -81,6 +82,19 @@ namespace CodexBridgeLauncherApp
                 if (a[i] != b[i]) return a[i].CompareTo(b[i]);
             }
             return 0;
+        }
+
+        private static void EnsureModernTls()
+        {
+            try
+            {
+                // This launcher is compiled without an app.config, so the runtime treats it as a
+                // .NET 4.0 application and ServicePointManager.SecurityProtocol defaults to
+                // Ssl3|Tls only. GitHub requires TLS 1.2, and without this the update check fails
+                // with "could not create SSL/TLS secure channel" (WebException SecureChannelFailure).
+                ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12;
+            }
+            catch { }
         }
 
         private static int[] VersionParts(string value)
