@@ -8,6 +8,9 @@ CodexBridge follows semantic public release versions from the repository-root `V
 
 - The Windows update check now enables TLS 1.2 before contacting GitHub. The launcher is compiled without an `app.config`, so the runtime treated it as a .NET 4.0 application whose default `ServicePointManager.SecurityProtocol` was `Ssl3, Tls` only; GitHub requires TLS 1.2, so "Check for Updates..." failed with `SecureChannelFailure` ("could not create SSL/TLS secure channel").
 - Added a regression contract that fails if the TLS 1.2 opt-in is removed or moved after the request is created.
+- Update check outcomes (available, already up to date, failed) are now written to `launcher.log` so failures can be diagnosed without a debug build.
+- Added a fallback update check through the public `releases/latest` redirect when the GitHub REST API is blocked or rate-limited; the redirect path does not consume the unauthenticated API quota.
+- The manual "could not check for updates" message now states that a proxy or firewall blocking `api.github.com` is the usual cause.
 
 ## [0.1.5] - 2026-09-20
 

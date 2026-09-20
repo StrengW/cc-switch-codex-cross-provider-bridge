@@ -77,6 +77,7 @@ namespace CodexBridgeLauncherApp
                 case "{0} failed: {1}": return Z("{0} 失败：{1}", "{0} 失敗：{1}");
                 case "Current version: {0}.": return Z("当前版本：{0}。", "目前版本：{0}。");
                 case "The latest release could not be checked. {0}": return Z("无法获取最新 Release。{0}", "無法取得最新 Release。{0}");
+                case "If this keeps failing, a proxy or firewall is usually blocking api.github.com.": return Z("如果反复失败，通常是代理或防火墙拦截了 api.github.com。", "如果反覆失敗，通常是代理或防火牆攔截了 api.github.com。");
                 case "Version {0} is available (current {1}). Open the GitHub Release page now?": return Z("发现新版本 {0}（当前为 {1}）。现在打开 GitHub Release 页面吗？", "發現新版本 {0}（目前為 {1}）。現在開啟 GitHub Release 頁面嗎？");
                 case "Uninstaller not found:\r\n{0}": return Z("找不到卸载程序：\r\n{0}", "找不到解除安裝程式：\r\n{0}");
                 case "Could not start the CodexBridge uninstaller.\r\n\r\n{0}": return Z("无法启动 CodexBridge 卸载程序。\r\n\r\n{0}", "無法啟動 CodexBridge 解除安裝程式。\r\n\r\n{0}");

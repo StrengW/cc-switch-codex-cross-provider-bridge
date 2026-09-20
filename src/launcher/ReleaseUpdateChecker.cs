@@ -38,6 +38,7 @@ namespace CodexBridgeLauncherApp
 
         internal static ReleaseUpdateResult Check(string currentVersion)
         {
+            string apiError = "";
             try
             {
                 EnsureModernTls();
@@ -57,20 +58,76 @@ namespace CodexBridgeLauncherApp
                     if (latest.Length == 0) return Failed("GitHub latest release did not contain a SemVer tag.");
                     string url = JsonString(json, "html_url");
                     if (url.Length == 0) url = ReleaseUrl;
-                    return new ReleaseUpdateResult
-                    {
-                        Status = CompareVersions(latest, currentVersion) > 0
-                            ? ReleaseUpdateStatus.UpdateAvailable
-                            : ReleaseUpdateStatus.UpToDate,
-                        LatestVersion = latest,
-                        ReleaseUrl = url
-                    };
+                    return Build(latest, url, currentVersion);
                 }
             }
             catch (Exception ex)
             {
-                return Failed(ex.Message);
+                apiError = DescribeError(ex);
             }
+
+            // Some networks block or rate-limit the GitHub REST API even though the regular
+            // github.com site is reachable, so retry through the public releases/latest
+            // redirect, which does not consume the unauthenticated API quota.
+            try
+            {
+                string latest = NormalizeVersion(LatestTagFromRedirect(currentVersion));
+                if (latest.Length > 0) return Build(latest, ReleaseUrl, currentVersion);
+            }
+            catch { }
+
+            return Failed(apiError);
+        }
+
+        private static ReleaseUpdateResult Build(string latest, string url, string currentVersion)
+        {
+            return new ReleaseUpdateResult
+            {
+                Status = CompareVersions(latest, currentVersion) > 0
+                    ? ReleaseUpdateStatus.UpdateAvailable
+                    : ReleaseUpdateStatus.UpToDate,
+                LatestVersion = latest,
+                ReleaseUrl = url
+            };
+        }
+
+        private static string LatestTagFromRedirect(string currentVersion)
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(ReleaseUrl + "/latest");
+            request.Method = "HEAD";
+            request.AllowAutoRedirect = false;
+            request.UserAgent = "CodexBridge-Launcher/" + currentVersion;
+            request.Timeout = 5000;
+            request.ReadWriteTimeout = 5000;
+            try
+            {
+                using (WebResponse response = request.GetResponse())
+                {
+                    return TagFromLocation(response.Headers["Location"]);
+                }
+            }
+            catch (WebException ex)
+            {
+                if (ex.Response == null) return "";
+                return TagFromLocation(ex.Response.Headers["Location"]);
+            }
+        }
+
+        private static string TagFromLocation(string location)
+        {
+            if (String.IsNullOrEmpty(location)) return "";
+            int index = location.LastIndexOf("/tag/", StringComparison.OrdinalIgnoreCase);
+            if (index < 0) return "";
+            return location.Substring(index + 5);
+        }
+
+        private static string DescribeError(Exception ex)
+        {
+            WebException web = ex as WebException;
+            if (web == null) return ex.Message;
+            if (web.Status == WebExceptionStatus.SecureChannelFailure)
+                return "TLS handshake failed (SecureChannelFailure); a proxy or firewall may be intercepting HTTPS.";
+            return web.Status + ": " + web.Message;
         }
 
         internal static int CompareVersions(string left, string right)

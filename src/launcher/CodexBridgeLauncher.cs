@@ -1105,20 +1105,36 @@ namespace CodexBridgeLauncherApp
                 if (result == null) return;
                 if (result.Status == ReleaseUpdateStatus.UpdateAvailable)
                 {
+                    Log("Update check: version " + result.LatestVersion + " is available (current " + Program.PublicVersion + ").");
                     SaveStateValue("latest_release_version", result.LatestVersion);
                     SaveStateValue("latest_release_url", result.ReleaseUrl);
                     RunOnUiThread(delegate { ShowUpdatePrompt(result); });
                 }
+                else if (result.Status == ReleaseUpdateStatus.Failed)
+                {
+                    Log("Update check failed: " + result.Error);
+                    if (manual) ShowUpdateFailure(result.Error);
+                }
                 else if (manual)
                 {
+                    Log("Update check: already up to date (" + Program.PublicVersion + ").");
                     RunOnUiThread(delegate
                     {
-                        if (result.Status == ReleaseUpdateStatus.UpToDate)
-                            Balloon(ui.T("CodexBridge is up to date"), ui.F("Current version: {0}.", Program.PublicVersion), ToolTipIcon.Info);
-                        else
-                            Balloon(ui.T("Could not check for updates"), ui.F("The latest release could not be checked. {0}", result.Error), ToolTipIcon.Error);
+                        Balloon(ui.T("CodexBridge is up to date"), ui.F("Current version: {0}.", Program.PublicVersion), ToolTipIcon.Info);
                     });
                 }
+            });
+        }
+
+        private void ShowUpdateFailure(string error)
+        {
+            RunOnUiThread(delegate
+            {
+                Balloon(
+                    ui.T("Could not check for updates"),
+                    ui.F("The latest release could not be checked. {0}", error) + " " +
+                        ui.T("If this keeps failing, a proxy or firewall is usually blocking api.github.com."),
+                    ToolTipIcon.Error);
             });
         }
 
