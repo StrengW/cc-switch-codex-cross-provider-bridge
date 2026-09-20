@@ -273,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(menu, "Open Watcher Log", #selector(openWatcherLog))
         add(menu, "Open Launcher Log", #selector(openLauncherLog))
         add(menu, "Open Log Folder", #selector(openLogFolder))
-        add(menu, "Check for Updates...", #selector(checkForUpdates))
+        add(menu, "Check for Updates...", #selector(manualCheckForUpdates))
         loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         menu.addItem(loginItem)
         menu.addItem(.separator())
@@ -313,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.buttons.last?.keyEquivalent = "\r"
     }
 
-    @objc private func checkForUpdates() { checkForUpdates(manual: true) }
+    @objc private func manualCheckForUpdates() { checkForUpdates(manual: true) }
     private func checkForUpdates(manual: Bool) {
         if !manual && !shouldCheckForUpdates() { return }
         ReleaseUpdateChecker.check(currentVersion: currentVersion) { [weak self] result in
