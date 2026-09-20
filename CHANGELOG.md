@@ -2,6 +2,19 @@
 
 CodexBridge follows semantic public release versions from the repository-root `VERSION` file. Internal component revision labels that may appear in diagnostic logs are implementation markers, not public release versions.
 
+## [0.1.4] - 2026-09-20
+
+### Added
+
+- Added daily background checks for the latest GitHub Release on Windows and macOS.
+- Added localized update prompts with a direct link to the Release page; updates are never downloaded or installed automatically.
+- Added Windows tray/menu/balloon localization based on the system UI culture, including simplified and traditional Chinese.
+- Added macOS menu bar and prompt language fallback based on the system language and preferred languages.
+
+### Packaging
+
+- Included the Windows launcher localization and update-check source files in the source-bootstrap Release ZIP.
+
 ## [0.1.3] - 2026-09-19
 
 ### Added
