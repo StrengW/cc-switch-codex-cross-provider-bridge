@@ -614,7 +614,16 @@ namespace CodexBridgeLauncherApp
             string exe = GetState("cc_switch_exe");
             string shortcut = GetState("cc_switch_shortcut");
             bool started = false;
-            if (!string.IsNullOrEmpty(exe) && File.Exists(exe)) started = StartDetached(exe, null);
+            if (!IsRememberedCcSwitchExeValid(exe))
+            {
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    Log("Discarding remembered CC Switch path because it is not a CC Switch executable: " + exe);
+                    SaveStateValue("cc_switch_exe", "");
+                }
+                exe = "";
+            }
+            if (!string.IsNullOrEmpty(exe)) started = StartDetached(exe, null);
             if (!started)
             {
                 string discovered = DiscoverCcSwitchExe();
@@ -624,15 +633,29 @@ namespace CodexBridgeLauncherApp
                     started = StartDetached(discovered, null);
                 }
             }
-            if (!started && !string.IsNullOrEmpty(shortcut) && File.Exists(shortcut))
-                started = StartShell(shortcut);
+            if (!started)
+            {
+                string resolved = ResolveShortcutTarget(shortcut);
+                if (IsRememberedCcSwitchExeValid(resolved))
+                {
+                    SaveStateValue("cc_switch_exe", resolved);
+                    started = StartDetached(resolved, null);
+                }
+            }
+            if (!started && !string.IsNullOrEmpty(shortcut) && File.Exists(shortcut)) started = StartShell(shortcut);
             if (!started)
             {
                 string link = DiscoverShortcut("*CC*Switch*.lnk");
                 if (!string.IsNullOrEmpty(link))
                 {
                     SaveStateValue("cc_switch_shortcut", link);
-                    started = StartShell(link);
+                    string resolved = ResolveShortcutTarget(link);
+                    if (IsRememberedCcSwitchExeValid(resolved))
+                    {
+                        SaveStateValue("cc_switch_exe", resolved);
+                        started = StartDetached(resolved, null);
+                    }
+                    if (!started) started = StartShell(link);
                 }
             }
             return started;
@@ -770,18 +793,59 @@ namespace CodexBridgeLauncherApp
                 try
                 {
                     string name = p.ProcessName ?? "";
-                    string title = p.MainWindowTitle ?? "";
                     string path = SafeProcessPath(p);
-                    if (Regex.IsMatch(name, "(?i)^cc[-_ ]?switch$|^ccswitch$") ||
-                        Regex.IsMatch(path ?? "", "(?i)cc[-_ ]?switch|ccswitch") ||
-                        Regex.IsMatch(title, "(?i)CC\\s*Switch"))
+                    // Only the process name and the executable path may identify CC Switch.
+                    // A window title is user-controlled (browser tabs, editors, chats) and must
+                    // never decide which process gets killed or remembered as CC Switch.
+                    if (IsCcSwitchName(name) || IsCcSwitchExecutablePath(path))
                     {
+                        Log("Matched CC Switch process: name=" + name + "; path=" + (String.IsNullOrEmpty(path) ? "<unavailable>" : path));
                         result.Add(p);
                     }
                 }
                 catch { }
             }
             return result;
+        }
+
+        private static bool IsCcSwitchName(string value)
+        {
+            if (String.IsNullOrEmpty(value)) return false;
+            return Regex.IsMatch(value, "(?i)^cc[-_ ]?switch$");
+        }
+
+        private static bool IsCcSwitchExecutablePath(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return false;
+            string fileName = "";
+            string directoryName = "";
+            try { fileName = Path.GetFileNameWithoutExtension(path) ?? ""; } catch { }
+            try { directoryName = Path.GetFileName(Path.GetDirectoryName(path) ?? "") ?? ""; } catch { }
+            return IsCcSwitchName(fileName) || IsCcSwitchName(directoryName);
+        }
+
+        private static bool IsRememberedCcSwitchExeValid(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return false;
+            if (!File.Exists(path)) return false;
+            return IsCcSwitchExecutablePath(path);
+        }
+
+        private static string ResolveShortcutTarget(string shortcutPath)
+        {
+            try
+            {
+                if (String.IsNullOrEmpty(shortcutPath) || !File.Exists(shortcutPath)) return "";
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return "";
+                object shell = Activator.CreateInstance(shellType);
+                if (shell == null) return "";
+                object link = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { shortcutPath });
+                if (link == null) return "";
+                object target = link.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, link, null);
+                return target == null ? "" : target.ToString();
+            }
+            catch { return ""; }
         }
 
         private List<Process> FindCodexProcesses()
@@ -826,14 +890,19 @@ namespace CodexBridgeLauncherApp
             for (int i = 0; i < processes.Count; i++)
             {
                 string path = SafeProcessPath(processes[i]);
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                if (IsRememberedCcSwitchExeValid(path))
                 {
                     SaveStateValue("cc_switch_exe", path);
                     return;
                 }
             }
             string shortcut = DiscoverShortcut("*CC*Switch*.lnk");
-            if (!string.IsNullOrEmpty(shortcut)) SaveStateValue("cc_switch_shortcut", shortcut);
+            if (!string.IsNullOrEmpty(shortcut))
+            {
+                SaveStateValue("cc_switch_shortcut", shortcut);
+                string resolved = ResolveShortcutTarget(shortcut);
+                if (IsRememberedCcSwitchExeValid(resolved)) SaveStateValue("cc_switch_exe", resolved);
+            }
         }
 
         private static string SafeProcessPath(Process p)
@@ -847,18 +916,39 @@ namespace CodexBridgeLauncherApp
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            string[] candidates = new string[]
+            List<string> candidates = new List<string>();
+            candidates.Add(Path.Combine(local, "Programs", "CC Switch", "CC Switch.exe"));
+            candidates.Add(Path.Combine(local, "Programs", "CCSwitch", "CCSwitch.exe"));
+            candidates.Add(Path.Combine(local, "Programs", "cc-switch", "cc-switch.exe"));
+            candidates.Add(Path.Combine(local, "CC Switch", "CC Switch.exe"));
+            candidates.Add(Path.Combine(local, "CCSwitch", "CCSwitch.exe"));
+            candidates.Add(Path.Combine(pf, "CC Switch", "CC Switch.exe"));
+            candidates.Add(Path.Combine(pf, "CCSwitch", "CCSwitch.exe"));
+            candidates.Add(Path.Combine(pf, "cc-switch", "cc-switch.exe"));
+            candidates.Add(Path.Combine(pf86, "CC Switch", "CC Switch.exe"));
+            candidates.Add(Path.Combine(pf86, "CCSwitch", "CCSwitch.exe"));
+            candidates.Add(Path.Combine(pf86, "cc-switch", "cc-switch.exe"));
+            // Portable installs such as D:\CCSwitch\cc-switch.exe are common, so probe the
+            // root of every fixed drive for the known CC Switch folder/file names.
+            try
             {
-                Path.Combine(local, "Programs", "CC Switch", "CC Switch.exe"),
-                Path.Combine(local, "Programs", "CCSwitch", "CCSwitch.exe"),
-                Path.Combine(local, "CC Switch", "CC Switch.exe"),
-                Path.Combine(local, "CCSwitch", "CCSwitch.exe"),
-                Path.Combine(pf, "CC Switch", "CC Switch.exe"),
-                Path.Combine(pf, "CCSwitch", "CCSwitch.exe"),
-                Path.Combine(pf86, "CC Switch", "CC Switch.exe"),
-                Path.Combine(pf86, "CCSwitch", "CCSwitch.exe")
-            };
-            for (int i = 0; i < candidates.Length; i++) if (File.Exists(candidates[i])) return candidates[i];
+                DriveInfo[] drives = DriveInfo.GetDrives();
+                for (int i = 0; i < drives.Length; i++)
+                {
+                    try
+                    {
+                        if (drives[i].DriveType != DriveType.Fixed) continue;
+                        string root = drives[i].RootDirectory.FullName;
+                        candidates.Add(Path.Combine(root, "CCSwitch", "cc-switch.exe"));
+                        candidates.Add(Path.Combine(root, "CCSwitch", "CCSwitch.exe"));
+                        candidates.Add(Path.Combine(root, "CC Switch", "CC Switch.exe"));
+                        candidates.Add(Path.Combine(root, "cc-switch", "cc-switch.exe"));
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            for (int i = 0; i < candidates.Count; i++) if (File.Exists(candidates[i])) return candidates[i];
             return "";
         }
 
@@ -1583,7 +1673,7 @@ namespace CodexBridgeLauncherApp
         private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValueName = "CodexBridgeLauncher";
         private const string UninstallRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBridge";
-        private const string ProductVersion = "0.1.4";
+        private const string ProductVersion = "0.1.5";
         internal static string PublicVersion { get { return ProductVersion; } }
 
         internal static string PowerShellExePath()
