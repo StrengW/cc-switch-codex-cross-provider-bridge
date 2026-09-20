@@ -20,7 +20,7 @@ def _normalized_sha256(path: Path) -> str:
 
 def test_tray_exposes_standard_uninstall_entry_with_confirmation():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
-    assert 'new ToolStripMenuItem("Uninstall CodexBridge...")' in text
+    assert 'new ToolStripMenuItem(ui.T("Uninstall CodexBridge..."))' in text
     assert 'GetUninstallDialogText' in text
     assert 'MessageBoxButtons.YesNo' in text
     assert 'MessageBoxDefaultButton.Button2' in text

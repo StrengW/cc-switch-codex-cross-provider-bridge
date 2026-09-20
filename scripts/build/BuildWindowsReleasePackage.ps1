@@ -48,6 +48,8 @@ $files = @(
     'docs\PROJECT_OVERVIEW.zh-CN.md',
     'src\bridge\codex_provider_bridge.py',
     'src\launcher\CodexBridgeLauncher.cs',
+    'src\launcher\LauncherUiText.cs',
+    'src\launcher\ReleaseUpdateChecker.cs',
     'src\launcher\CodexBridgeLauncher.csproj',
     'scripts\build\BuildCodexBridgeLauncher.ps1',
     'scripts\windows\StartCodexBridge.ps1',

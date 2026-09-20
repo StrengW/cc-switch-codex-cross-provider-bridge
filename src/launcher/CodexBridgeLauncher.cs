@@ -43,6 +43,7 @@ namespace CodexBridgeLauncherApp
         private readonly string bridgeStdoutLog;
         private readonly string bridgeStderrLog;
         private readonly string managerScript;
+        private readonly LauncherUiText ui = new LauncherUiText();
         private readonly Dictionary<string, string> state = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private string lastHandledKey = "";
         private string pendingKey = "";
@@ -87,7 +88,7 @@ namespace CodexBridgeLauncherApp
             launcherIcon = LoadLauncherIcon();
             tray = new NotifyIcon();
             tray.Icon = launcherIcon;
-            tray.Text = "Codex Bridge Launcher";
+            tray.Text = ui.T("Codex Bridge Launcher");
             tray.Visible = true;
             tray.ContextMenuStrip = BuildMenu();
             tray.DoubleClick += delegate { OpenLogFolder(); };
@@ -116,7 +117,7 @@ namespace CodexBridgeLauncherApp
                     // whole process; keep the launcher alive so the user can inspect logs
                     // or retry from the tray.
                     Log("ERROR startup bridge ensure: " + ex);
-                    try { Balloon("Codex Bridge Launcher", "Bridge startup failed. Launcher is still running; open Launcher Log for details.", ToolTipIcon.Error); } catch { }
+                    try { Balloon(ui.T("Codex Bridge Launcher"), ui.T("Bridge startup failed. Launcher is still running; open Launcher Log for details."), ToolTipIcon.Error); } catch { }
                 }
 
                 try
@@ -134,10 +135,11 @@ namespace CodexBridgeLauncherApp
             pollTimer.Tick += PollTimerTick;
             pollTimer.Start();
 
-            UpdateStatusText("Starting / waiting for route...");
-            Balloon("Codex Bridge Launcher", residentAutoStartEnabled
-                ? "Ready. CodexBridge is configured to start with Windows; provider switching and compatibility supervision are active."
-                : "Ready. CodexBridge Windows auto-start is disabled; you can enable it from the tray if desired.", ToolTipIcon.Info);
+            UpdateStatusText(ui.T("Starting / waiting for route..."));
+            Balloon(ui.T("Codex Bridge Launcher"), residentAutoStartEnabled
+                ? ui.T("Ready. CodexBridge is configured to start with Windows; provider switching and compatibility supervision are active.")
+                : ui.T("Ready. CodexBridge Windows auto-start is disabled; you can enable it from the tray if desired."), ToolTipIcon.Info);
+            CheckForUpdates(false);
         }
 
 
@@ -161,34 +163,34 @@ namespace CodexBridgeLauncherApp
         private ContextMenuStrip BuildMenu()
         {
             ContextMenuStrip menu = new ContextMenuStrip();
-            statusItem = new ToolStripMenuItem("Status: starting...");
+            statusItem = new ToolStripMenuItem(ui.T("Status: starting..."));
             statusItem.Enabled = false;
             menu.Items.Add(statusItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem restartCodex = new ToolStripMenuItem("Restart Codex");
-            restartCodex.Click += delegate { QueueManualAction("Manual Codex restart", delegate { RestartCodex("manual tray action"); }); };
+            ToolStripMenuItem restartCodex = new ToolStripMenuItem(ui.T("Restart Codex"));
+            restartCodex.Click += delegate { QueueManualAction(ui.T("Manual Codex restart"), delegate { RestartCodex("manual tray action"); }); };
             menu.Items.Add(restartCodex);
 
-            ToolStripMenuItem restartCc = new ToolStripMenuItem("Restart CC Switch");
-            restartCc.Click += delegate { QueueManualAction("Manual CC Switch restart", delegate { RestartCcSwitch(); }); };
+            ToolStripMenuItem restartCc = new ToolStripMenuItem(ui.T("Restart CC Switch"));
+            restartCc.Click += delegate { QueueManualAction(ui.T("Manual CC Switch restart"), delegate { RestartCcSwitch(); }); };
             menu.Items.Add(restartCc);
 
-            ToolStripMenuItem ensureBridge = new ToolStripMenuItem("Ensure Bridge Running");
-            ensureBridge.Click += delegate { QueueManualAction("Ensure Bridge", EnsureBridgeRunning); };
+            ToolStripMenuItem ensureBridge = new ToolStripMenuItem(ui.T("Ensure Bridge Running"));
+            ensureBridge.Click += delegate { QueueManualAction(ui.T("Ensure Bridge"), EnsureBridgeRunning); };
             menu.Items.Add(ensureBridge);
 
-            pauseItem = new ToolStripMenuItem("Pause automatic restarts");
+            pauseItem = new ToolStripMenuItem(ui.T("Pause automatic restarts"));
             pauseItem.CheckOnClick = true;
             pauseItem.CheckedChanged += delegate
             {
                 paused = pauseItem.Checked;
                 Log(paused ? "Automatic restart watcher paused." : "Automatic restart watcher resumed.");
-                UpdateStatusText(paused ? "Paused" : "Watching provider switches");
+                UpdateStatusText(ui.T(paused ? "Paused" : "Watching provider switches"));
             };
             menu.Items.Add(pauseItem);
 
-            startupItem = new ToolStripMenuItem("Start CodexBridge with Windows");
+            startupItem = new ToolStripMenuItem(ui.T("Start CodexBridge with Windows"));
             startupItem.CheckOnClick = true;
             startupItem.Checked = IsStartupRegistered();
             startupItem.CheckedChanged += delegate
@@ -197,47 +199,53 @@ namespace CodexBridgeLauncherApp
                 {
                     SetStartupRegistration(startupItem.Checked);
                     Log("Resident CodexBridge auto-start " + (startupItem.Checked ? "enabled." : "disabled."));
-                    Balloon("Codex Bridge Launcher", startupItem.Checked
-                        ? "Enabled. CodexBridge starts at Windows sign-in so Official conversations work even when CC Switch is closed."
-                        : "Disabled. CodexBridge will no longer start automatically at Windows sign-in.", ToolTipIcon.Info);
+                    Balloon(ui.T("Codex Bridge Launcher"), startupItem.Checked
+                        ? ui.T("Enabled. CodexBridge starts at Windows sign-in so Official conversations work even when CC Switch is closed.")
+                        : ui.T("Disabled. CodexBridge will no longer start automatically at Windows sign-in."), ToolTipIcon.Info);
                 }
                 catch (Exception ex)
                 {
                     Log("ERROR changing autostart registration: " + ex);
-                    Balloon("Codex Bridge Launcher", "Could not change Windows startup setting: " + ex.Message, ToolTipIcon.Error);
+                    Balloon(ui.T("Codex Bridge Launcher"), ui.F("Could not change Windows startup setting: {0}", ex.Message), ToolTipIcon.Error);
                 }
             };
             menu.Items.Add(startupItem);
 
-            ToolStripMenuItem openAppFolder = new ToolStripMenuItem("Open Installed App Folder");
+            ToolStripMenuItem openAppFolder = new ToolStripMenuItem(ui.T("Open Installed App Folder"));
             openAppFolder.Click += delegate { OpenFolder(installDir); };
             menu.Items.Add(openAppFolder);
 
             menu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem openBridge = new ToolStripMenuItem("Open Bridge Runtime Log");
+            ToolStripMenuItem openBridge = new ToolStripMenuItem(ui.T("Open Bridge Runtime Log"));
             openBridge.Click += delegate { OpenTextFile(bridgeStderrLog); };
             menu.Items.Add(openBridge);
 
-            ToolStripMenuItem openBridgeStartup = new ToolStripMenuItem("Open Bridge Startup Log");
+            ToolStripMenuItem openBridgeStartup = new ToolStripMenuItem(ui.T("Open Bridge Startup Log"));
             openBridgeStartup.Click += delegate { OpenTextFile(bridgeStdoutLog); };
             menu.Items.Add(openBridgeStartup);
 
-            ToolStripMenuItem openLauncher = new ToolStripMenuItem("Open Launcher Log");
+            ToolStripMenuItem openLauncher = new ToolStripMenuItem(ui.T("Open Launcher Log"));
             openLauncher.Click += delegate { OpenTextFile(launcherLog); };
             menu.Items.Add(openLauncher);
 
-            ToolStripMenuItem openFolder = new ToolStripMenuItem("Open Log Folder");
+            ToolStripMenuItem openFolder = new ToolStripMenuItem(ui.T("Open Log Folder"));
             openFolder.Click += delegate { OpenLogFolder(); };
             menu.Items.Add(openFolder);
 
             menu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem exit = new ToolStripMenuItem("Exit Everything...");
+            ToolStripMenuItem checkUpdates = new ToolStripMenuItem(ui.T("Check for Updates..."));
+            checkUpdates.Click += delegate { CheckForUpdates(true); };
+            menu.Items.Add(checkUpdates);
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            ToolStripMenuItem exit = new ToolStripMenuItem(ui.T("Exit Everything..."));
             exit.Click += delegate { ExitLauncher(); };
             menu.Items.Add(exit);
 
-            ToolStripMenuItem uninstall = new ToolStripMenuItem("Uninstall CodexBridge...");
+            ToolStripMenuItem uninstall = new ToolStripMenuItem(ui.T("Uninstall CodexBridge..."));
             uninstall.Click += delegate { UninstallCodexBridge(); };
             menu.Items.Add(uninstall);
             return menu;
@@ -315,7 +323,7 @@ namespace CodexBridgeLauncherApp
                 catch (Exception ex)
                 {
                     Log("ERROR " + name + ": " + ex.Message);
-                    Balloon("Codex Bridge Launcher", name + " failed: " + ex.Message, ToolTipIcon.Error);
+                    Balloon(ui.T("Codex Bridge Launcher"), ui.F("{0} failed: {1}", name, ex.Message), ToolTipIcon.Error);
                 }
             });
         }
@@ -332,7 +340,7 @@ namespace CodexBridgeLauncherApp
                 lastHandledKey = route.Key;
                 SaveStateValue("last_handled_route", lastHandledKey);
                 pendingKey = "";
-                UpdateStatusText("Route: " + FriendlyRoute(route));
+                UpdateStatusText(ui.F("Route: {0}", FriendlyRoute(route)));
                 Log("Initial route: " + route.Key + ". No restart triggered.");
                 // A launcher started while a third-party route is already selected
                 // should also heal a previously closed CC Switch proxy.
@@ -368,7 +376,7 @@ namespace CodexBridgeLauncherApp
             SaveStateValue("last_handled_route", lastHandledKey);
             pendingKey = "";
             handling = true;
-            UpdateStatusText("Switching: " + FriendlyRoute(route));
+            UpdateStatusText(ui.F("Switching: {0}", FriendlyRoute(route)));
             Log("Provider switch detected: " + route.Key);
 
             ThreadPool.QueueUserWorkItem(delegate
@@ -391,26 +399,25 @@ namespace CodexBridgeLauncherApp
                         RestartCodex("Official route / ChatGPT account reload");
                     }
                     Log("Switch handling complete. Bridge was not restarted.");
-                    Balloon("Provider switch complete", FriendlyRoute(route) + " is ready. Bridge remained resident.", ToolTipIcon.Info);
+                    Balloon(ui.T("Provider switch complete"), ui.F("{0} is ready. Bridge remained resident.", FriendlyRoute(route)), ToolTipIcon.Info);
                 }
                 catch (Exception ex)
                 {
                     Log("ERROR handling switch: " + ex);
-                    Balloon("Provider switch failed", ex.Message, ToolTipIcon.Error);
+                    Balloon(ui.T("Provider switch failed"), ex.Message, ToolTipIcon.Error);
                 }
                 finally
                 {
                     handling = false;
-                    UpdateStatusText("Route: " + FriendlyRoute(route));
+                    UpdateStatusText(ui.F("Route: {0}", FriendlyRoute(route)));
                 }
             });
         }
 
-        private static string FriendlyRoute(RouteSnapshot route)
+        private string FriendlyRoute(RouteSnapshot route)
         {
-            if (route == null) return "unknown";
-            if (route.Kind == "official") return "Official" + (string.IsNullOrEmpty(route.Model) ? "" : " / " + route.Model);
-            return "Third-party" + (string.IsNullOrEmpty(route.Model) ? "" : " / " + route.Model);
+            if (route == null) return ui.T("unknown");
+            return ui.Route(route.Kind, route.Model);
         }
 
         private RouteSnapshot ReadRouteSnapshot()
@@ -464,7 +471,7 @@ namespace CodexBridgeLauncherApp
                 if (!File.Exists(managerScript))
                 {
                     Log("ERROR bridge manager not found: " + managerScript);
-                    Balloon("Codex Bridge Launcher", "codex_bridge_manager.ps1 not found next to the launcher.", ToolTipIcon.Error);
+                    Balloon(ui.T("Codex Bridge Launcher"), ui.T("codex_bridge_manager.ps1 not found next to the launcher."), ToolTipIcon.Error);
                     return;
                 }
 
@@ -575,7 +582,7 @@ namespace CodexBridgeLauncherApp
 
             thirdPartyProxyRecoveryQueued = true;
             handling = true;
-            UpdateStatusText("Recovering CC Switch proxy for " + route.Model + "...");
+            UpdateStatusText(ui.F("Recovering CC Switch proxy for {0}...", route.Model));
             Log("Third-party route is active but CC Switch proxy :15721 is unavailable; scheduling automatic recovery without changing provider/model.");
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -585,19 +592,19 @@ namespace CodexBridgeLauncherApp
                     EnsureCcSwitchProxyRunning();
                     if (exiting) return;
                     Log("Third-party CC Switch proxy recovery complete; route remains " + route.Key + ".");
-                    Balloon("CC Switch proxy restored", "Third-party route " + route.Model + " is available again.", ToolTipIcon.Info);
+                    Balloon(ui.T("CC Switch proxy restored"), ui.F("Third-party route {0} is available again.", route.Model), ToolTipIcon.Info);
                 }
                 catch (Exception ex)
                 {
                     Log("ERROR recovering CC Switch proxy for active third-party route: " + ex);
-                    Balloon("CC Switch proxy unavailable", "Could not restore the third-party proxy automatically. Open CC Switch once or check Launcher Log.", ToolTipIcon.Error);
+                    Balloon(ui.T("CC Switch proxy unavailable"), ui.T("Could not restore the third-party proxy automatically. Open CC Switch once or check Launcher Log."), ToolTipIcon.Error);
                 }
                 finally
                 {
                     nextThirdPartyProxyHealthUtc = DateTime.UtcNow.AddSeconds(3);
                     thirdPartyProxyRecoveryQueued = false;
                     handling = false;
-                    UpdateStatusText("Route: " + FriendlyRoute(route));
+                    UpdateStatusText(ui.F("Route: {0}", FriendlyRoute(route)));
                 }
             });
         }
@@ -982,7 +989,7 @@ namespace CodexBridgeLauncherApp
                     menu.BeginInvoke(new Action<string>(UpdateStatusText), text);
                     return;
                 }
-                statusItem.Text = "Status: " + text;
+                statusItem.Text = ui.Status(text);
             }
             catch { }
         }
@@ -998,6 +1005,81 @@ namespace CodexBridgeLauncherApp
                 tray.ShowBalloonTip(2500);
             }
             catch { }
+        }
+
+        private void CheckForUpdates(bool manual)
+        {
+            if (exiting || (!manual && !ShouldCheckForUpdates())) return;
+            ReleaseUpdateChecker.CheckAsync(Program.PublicVersion, delegate(ReleaseUpdateResult result)
+            {
+                if (result == null) return;
+                if (result.Status == ReleaseUpdateStatus.UpdateAvailable)
+                {
+                    SaveStateValue("latest_release_version", result.LatestVersion);
+                    SaveStateValue("latest_release_url", result.ReleaseUrl);
+                    RunOnUiThread(delegate { ShowUpdatePrompt(result); });
+                }
+                else if (manual)
+                {
+                    RunOnUiThread(delegate
+                    {
+                        if (result.Status == ReleaseUpdateStatus.UpToDate)
+                            Balloon(ui.T("CodexBridge is up to date"), ui.F("Current version: {0}.", Program.PublicVersion), ToolTipIcon.Info);
+                        else
+                            Balloon(ui.T("Could not check for updates"), ui.F("The latest release could not be checked. {0}", result.Error), ToolTipIcon.Error);
+                    });
+                }
+            });
+        }
+
+        private bool ShouldCheckForUpdates()
+        {
+            DateTime previous;
+            string value = GetState("update_checked_at_utc");
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out previous) &&
+                (DateTime.UtcNow - previous.ToUniversalTime()).TotalHours < 24) return false;
+            SaveStateValue("update_checked_at_utc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+            return true;
+        }
+
+        private void ShowUpdatePrompt(ReleaseUpdateResult result)
+        {
+            if (exiting) return;
+            DialogResult answer = MessageBox.Show(
+                ui.F("Version {0} is available (current {1}). Open the GitHub Release page now?", result.LatestVersion, Program.PublicVersion),
+                ui.T("CodexBridge update available"),
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information,
+                MessageBoxDefaultButton.Button2);
+            if (answer == DialogResult.Yes) OpenReleasePage(result.ReleaseUrl);
+        }
+
+        private void OpenReleasePage(string url)
+        {
+            try
+            {
+                if (String.IsNullOrEmpty(url) || !url.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase)) url = ReleaseUpdateChecker.ReleaseUrl;
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = url;
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                Log("ERROR opening Release page: " + ex.Message);
+            }
+        }
+
+        private void RunOnUiThread(Action action)
+        {
+            try
+            {
+                ToolStrip menu = tray == null ? null : tray.ContextMenuStrip;
+                if (menu == null || menu.IsDisposed) return;
+                if (menu.InvokeRequired) { menu.BeginInvoke(action); return; }
+                action();
+            }
+            catch (Exception ex) { Log("WARNING update UI callback failed: " + ex.Message); }
         }
 
         private void StopBridgeForUpdate()
@@ -1186,8 +1268,8 @@ namespace CodexBridgeLauncherApp
             if (!File.Exists(script))
             {
                 MessageBox.Show(
-                    "Uninstaller not found:\r\n" + script,
-                    "CodexBridge",
+                    ui.F("Uninstaller not found:\r\n{0}", script),
+                    ui.T("CodexBridge"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
                 return;
@@ -1226,8 +1308,8 @@ namespace CodexBridgeLauncherApp
                 try { pollTimer.Start(); } catch { }
                 Log("ERROR starting uninstaller: " + ex);
                 MessageBox.Show(
-                    "Could not start the CodexBridge uninstaller.\r\n\r\n" + ex.Message,
-                    "CodexBridge",
+                    ui.F("Could not start the CodexBridge uninstaller.\r\n\r\n{0}", ex.Message),
+                    ui.T("CodexBridge"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
@@ -1430,7 +1512,7 @@ namespace CodexBridgeLauncherApp
         {
             string json = ReadTextFileSafe(statePath);
             if (string.IsNullOrEmpty(json)) return;
-            string[] keys = new string[] { "cc_switch_exe", "cc_switch_shortcut", "codex_gui_exe", "last_handled_route" };
+            string[] keys = new string[] { "cc_switch_exe", "cc_switch_shortcut", "codex_gui_exe", "last_handled_route", "update_checked_at_utc", "latest_release_version", "latest_release_url" };
             for (int i = 0; i < keys.Length; i++)
             {
                 string v = JsonString(json, keys[i]);
@@ -1502,6 +1584,7 @@ namespace CodexBridgeLauncherApp
         private const string StartupValueName = "CodexBridgeLauncher";
         private const string UninstallRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBridge";
         private const string ProductVersion = "0.1.3";
+        internal static string PublicVersion { get { return ProductVersion; } }
 
         internal static string PowerShellExePath()
         {
@@ -1710,8 +1793,9 @@ namespace CodexBridgeLauncherApp
                 EmergencyLog("Stable install/update failed: " + ex);
                 try
                 {
-                    MessageBox.Show("Could not install Codex Bridge into %LOCALAPPDATA%\\CodexProviderBridge\\app.\r\n\r\n" + ex.Message,
-                        "Codex Bridge Launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    LauncherUiText text = new LauncherUiText();
+                    MessageBox.Show(text.F("Could not install Codex Bridge into %LOCALAPPDATA%\\CodexProviderBridge\\app.\r\n\r\n{0}", ex.Message),
+                        text.T("Codex Bridge Launcher"), MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 catch { }
                 return false;
@@ -1943,7 +2027,8 @@ namespace CodexBridgeLauncherApp
             {
                 if (!HasArg(args, "--ccswitch-trigger") && !HasArg(args, "--autostart"))
                 {
-                    MessageBox.Show("Codex Bridge Launcher is already running in the system tray.", "Codex Bridge Launcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    LauncherUiText text = new LauncherUiText();
+                    MessageBox.Show(text.T("Codex Bridge Launcher is already running in the system tray."), text.T("Codex Bridge Launcher"), MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 mutex.Dispose();
                 return;
@@ -1960,8 +2045,9 @@ namespace CodexBridgeLauncherApp
                 EmergencyLog("Fatal launcher exception: " + ex);
                 try
                 {
-                    MessageBox.Show("Codex Bridge Launcher crashed. See %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log",
-                        "Codex Bridge Launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    LauncherUiText text = new LauncherUiText();
+                    MessageBox.Show(text.T("Codex Bridge Launcher crashed. See %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log"),
+                        text.T("Codex Bridge Launcher"), MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 catch { }
             }

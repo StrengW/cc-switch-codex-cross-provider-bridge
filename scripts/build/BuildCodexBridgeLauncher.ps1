@@ -16,6 +16,8 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
 }
 
 $source = Join-Path $ProjectRoot 'src\launcher\CodexBridgeLauncher.cs'
+$uiSource = Join-Path $ProjectRoot 'src\launcher\LauncherUiText.cs'
+$updateCheckerSource = Join-Path $ProjectRoot 'src\launcher\ReleaseUpdateChecker.cs'
 $proj = Join-Path $ProjectRoot 'src\launcher\CodexBridgeLauncher.csproj'
 $icon = Join-Path $ProjectRoot 'assets\CodexBridgeLauncher.ico'
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -28,6 +30,8 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 }
 
 if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Source not found: $source" }
+if (-not (Test-Path -LiteralPath $uiSource -PathType Leaf)) { throw "Source not found: $uiSource" }
+if (-not (Test-Path -LiteralPath $updateCheckerSource -PathType Leaf)) { throw "Source not found: $updateCheckerSource" }
 
 if ($WaitForPid -gt 0) {
     try {
@@ -51,7 +55,7 @@ if ($candidates.Count -gt 0) {
         "/out:$OutputPath"
     )
     if (Test-Path -LiteralPath $icon -PathType Leaf) { $compilerArgs += "/win32icon:$icon" }
-    $compilerArgs += $source
+    $compilerArgs += @($uiSource, $updateCheckerSource, $source)
     & $csc @compilerArgs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
         throw "csc.exe failed with exit code $LASTEXITCODE"

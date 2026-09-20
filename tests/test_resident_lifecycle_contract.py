@@ -41,7 +41,7 @@ def test_exit_everything_warns_then_stops_bridge_ccswitch_and_launcher_without_n
 
 def test_exit_menu_is_explicit_full_shutdown_not_hidden_tray():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
-    assert 'new ToolStripMenuItem("Exit Everything...")' in text
+    assert 'new ToolStripMenuItem(ui.T("Exit Everything..."))' in text
     assert 'new ToolStripMenuItem("Hide Tray")' not in text
 
 

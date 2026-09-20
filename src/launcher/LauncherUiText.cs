@@ -1,0 +1,116 @@
+using System;
+using System.Globalization;
+
+namespace CodexBridgeLauncherApp
+{
+    internal sealed class LauncherUiText
+    {
+        private readonly bool chinese;
+        private readonly bool traditional;
+
+        internal LauncherUiText()
+        {
+            string cultureName = "";
+            try { cultureName = CultureInfo.CurrentUICulture.Name ?? ""; } catch { }
+            if (String.IsNullOrEmpty(cultureName))
+            {
+                try { cultureName = CultureInfo.InstalledUICulture.Name ?? ""; } catch { }
+            }
+            chinese = cultureName.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+            traditional = cultureName.Equals("zh-TW", StringComparison.OrdinalIgnoreCase) ||
+                          cultureName.Equals("zh-HK", StringComparison.OrdinalIgnoreCase) ||
+                          cultureName.Equals("zh-MO", StringComparison.OrdinalIgnoreCase) ||
+                          cultureName.StartsWith("zh-Hant", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal string T(string english)
+        {
+            if (!chinese) return english;
+            switch (english)
+            {
+                case "Codex Bridge Launcher": return Z("CodexBridge 启动器", "CodexBridge 啟動器");
+                case "Status: starting...": return Z("状态：正在启动...", "狀態：正在啟動...");
+                case "Restart Codex": return Z("重启 Codex", "重新啟動 Codex");
+                case "Restart CC Switch": return Z("重启 CC Switch", "重新啟動 CC Switch");
+                case "Ensure Bridge Running": return Z("确保 Bridge 运行", "確保 Bridge 執行");
+                case "Pause automatic restarts": return Z("暂停自动重启", "暫停自動重新啟動");
+                case "Start CodexBridge with Windows": return Z("随 Windows 启动 CodexBridge", "隨 Windows 啟動 CodexBridge");
+                case "Open Installed App Folder": return Z("打开已安装程序目录", "開啟已安裝程式目錄");
+                case "Open Bridge Runtime Log": return Z("打开 Bridge 运行日志", "開啟 Bridge 執行記錄");
+                case "Open Bridge Startup Log": return Z("打开 Bridge 启动日志", "開啟 Bridge 啟動記錄");
+                case "Open Launcher Log": return Z("打开 Launcher 日志", "開啟 Launcher 記錄");
+                case "Open Log Folder": return Z("打开日志目录", "開啟記錄目錄");
+                case "Check for Updates...": return Z("检查更新...", "檢查更新...");
+                case "Exit Everything...": return Z("退出全部组件...", "退出全部元件...");
+                case "Uninstall CodexBridge...": return Z("卸载 CodexBridge...", "解除安裝 CodexBridge...");
+                case "Starting / waiting for route...": return Z("正在启动/等待路由...", "正在啟動/等待路由...");
+                case "Paused": return Z("已暂停", "已暫停");
+                case "Watching provider switches": return Z("正在监视 Provider 切换", "正在監視 Provider 切換");
+                case "Official": return Z("官方", "官方");
+                case "Third-party": return Z("第三方", "第三方");
+                case "unknown": return Z("未知", "未知");
+                case "Provider switch complete": return Z("Provider 切换完成", "Provider 切換完成");
+                case "Provider switch failed": return Z("Provider 切换失败", "Provider 切換失敗");
+                case "CC Switch proxy restored": return Z("CC Switch 代理已恢复", "CC Switch 代理已恢復");
+                case "CC Switch proxy unavailable": return Z("CC Switch 代理不可用", "CC Switch 代理無法使用");
+                case "CodexBridge update available": return Z("CodexBridge 有可用更新", "CodexBridge 有可用更新");
+                case "CodexBridge is up to date": return Z("CodexBridge 已是最新版本", "CodexBridge 已是最新版本");
+                case "Could not check for updates": return Z("无法检查更新", "無法檢查更新");
+                case "Open Latest Release": return Z("打开最新版本页面", "開啟最新版本頁面");
+                case "Later": return Z("稍后", "稍後");
+                case "Manual Codex restart": return Z("手动重启 Codex", "手動重新啟動 Codex");
+                case "Manual CC Switch restart": return Z("手动重启 CC Switch", "手動重新啟動 CC Switch");
+                case "Ensure Bridge": return Z("确保 Bridge", "確保 Bridge");
+                case "Bridge startup failed. Launcher is still running; open Launcher Log for details.": return Z("Bridge 启动失败。Launcher 仍在运行，请打开 Launcher 日志查看详情。", "Bridge 啟動失敗。Launcher 仍在執行，請開啟 Launcher 記錄查看詳情。");
+                case "Ready. CodexBridge is configured to start with Windows; provider switching and compatibility supervision are active.": return Z("已就绪。CodexBridge 已配置为随 Windows 启动，Provider 切换和兼容性监视已启用。", "已就緒。CodexBridge 已設定為隨 Windows 啟動，Provider 切換和相容性監視已啟用。");
+                case "Ready. CodexBridge Windows auto-start is disabled; you can enable it from the tray if desired.": return Z("已就绪。CodexBridge 随 Windows 自动启动已关闭，可从托盘重新启用。", "已就緒。CodexBridge 隨 Windows 自動啟動已關閉，可從系統匣重新啟用。");
+                case "Enabled. CodexBridge starts at Windows sign-in so Official conversations work even when CC Switch is closed.": return Z("已启用。登录 Windows 时会启动 CodexBridge，即使 CC Switch 关闭，官方对话也能工作。", "已啟用。登入 Windows 時會啟動 CodexBridge，即使 CC Switch 關閉，官方對話也能運作。");
+                case "Disabled. CodexBridge will no longer start automatically at Windows sign-in.": return Z("已关闭。CodexBridge 不会再随 Windows 登录自动启动。", "已關閉。CodexBridge 不會再隨 Windows 登入自動啟動。");
+                case "codex_bridge_manager.ps1 not found next to the launcher.": return Z("启动器旁边找不到 codex_bridge_manager.ps1。", "啟動器旁邊找不到 codex_bridge_manager.ps1。");
+                case "Could not restore the third-party proxy automatically. Open CC Switch once or check Launcher Log.": return Z("无法自动恢复第三方代理。请打开一次 CC Switch，或查看 Launcher 日志。", "無法自動恢復第三方代理。請開啟一次 CC Switch，或查看 Launcher 記錄。");
+                case "Route: {0}": return Z("路由：{0}", "路由：{0}");
+                case "Switching: {0}": return Z("正在切换：{0}", "正在切換：{0}");
+                case "{0} is ready. Bridge remained resident.": return Z("{0} 已就绪。Bridge 继续常驻。", "{0} 已就緒。Bridge 繼續常駐。");
+                case "Recovering CC Switch proxy for {0}...": return Z("正在恢复 {0} 的 CC Switch 代理...", "正在恢復 {0} 的 CC Switch 代理...");
+                case "Third-party route {0} is available again.": return Z("第三方路由 {0} 已恢复可用。", "第三方路由 {0} 已恢復可用。");
+                case "Could not change Windows startup setting: {0}": return Z("无法更改 Windows 启动设置：{0}", "無法變更 Windows 啟動設定：{0}");
+                case "{0} failed: {1}": return Z("{0} 失败：{1}", "{0} 失敗：{1}");
+                case "Current version: {0}.": return Z("当前版本：{0}。", "目前版本：{0}。");
+                case "The latest release could not be checked. {0}": return Z("无法获取最新 Release。{0}", "無法取得最新 Release。{0}");
+                case "Version {0} is available (current {1}). Open the GitHub Release page now?": return Z("发现新版本 {0}（当前为 {1}）。现在打开 GitHub Release 页面吗？", "發現新版本 {0}（目前為 {1}）。現在開啟 GitHub Release 頁面嗎？");
+                case "Uninstaller not found:\r\n{0}": return Z("找不到卸载程序：\r\n{0}", "找不到解除安裝程式：\r\n{0}");
+                case "Could not start the CodexBridge uninstaller.\r\n\r\n{0}": return Z("无法启动 CodexBridge 卸载程序。\r\n\r\n{0}", "無法啟動 CodexBridge 解除安裝程式。\r\n\r\n{0}");
+                case "Could not install Codex Bridge into %LOCALAPPDATA%\\CodexProviderBridge\\app.\r\n\r\n{0}": return Z("无法将 CodexBridge 安装到 %LOCALAPPDATA%\\CodexProviderBridge\\app。\r\n\r\n{0}", "無法將 CodexBridge 安裝到 %LOCALAPPDATA%\\CodexProviderBridge\\app。\r\n\r\n{0}");
+                case "Codex Bridge Launcher is already running in the system tray.": return Z("CodexBridge 启动器已在系统托盘中运行。", "CodexBridge 啟動器已在系統匣中執行。");
+                case "Codex Bridge Launcher crashed. See %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log": return Z("CodexBridge 启动器崩溃，请查看 %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log", "CodexBridge 啟動器當機，請查看 %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log");
+                default: return english;
+            }
+        }
+
+        internal string F(string template, params object[] args)
+        {
+            return String.Format(T(template), args);
+        }
+
+        internal string Status(string value)
+        {
+            return chinese ? (traditional ? "狀態：" : "状态：") + value : "Status: " + value;
+        }
+
+        internal string Route(string kind, string model)
+        {
+            string prefix = kind == "official" ? T("Official") : kind == "third-party" ? T("Third-party") : T("unknown");
+            return String.IsNullOrEmpty(model) ? prefix : prefix + " / " + model;
+        }
+
+        internal string FallbackRoute(string model)
+        {
+            return Route("third-party", model);
+        }
+
+        private string Z(string simplified, string traditional)
+        {
+            return this.traditional ? traditional : simplified;
+        }
+    }
+}

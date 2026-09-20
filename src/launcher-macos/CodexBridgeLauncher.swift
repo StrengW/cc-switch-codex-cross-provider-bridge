@@ -63,11 +63,72 @@ struct LocalizedCopy {
     let chinese: Bool
 
     init() {
-        chinese = Locale.preferredLanguages.first?.hasPrefix("zh") == true
+        let preferred = Locale.preferredLanguages.compactMap { Locale(identifier: $0).languageCode }
+        let systemLanguage = Locale.current.languageCode
+        chinese = systemLanguage?.hasPrefix("zh") == true || preferred.contains { $0.hasPrefix("zh") }
     }
 
     func text(_ english: String, _ simplifiedChinese: String) -> String {
         chinese ? simplifiedChinese : english
+    }
+}
+
+enum ReleaseUpdateResult {
+    case failed(String)
+    case upToDate
+    case available(version: String, url: URL)
+}
+
+final class ReleaseUpdateChecker {
+    static let apiURL = URL(string: "https://api.github.com/repos/StrengW/cc-switch-codex-cross-provider-bridge/releases/latest")!
+    static let releaseURL = URL(string: "https://github.com/StrengW/cc-switch-codex-cross-provider-bridge/releases")!
+
+    static func check(currentVersion: String, completion: @escaping (ReleaseUpdateResult) -> Void) {
+        var request = URLRequest(url: apiURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("CodexBridge-Launcher/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            guard let data, error == nil else {
+                DispatchQueue.main.async { completion(.failed(error?.localizedDescription ?? "Network request failed.")) }
+                return
+            }
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = object["tag_name"] as? String,
+                  let latest = normalizedVersion(tag) else {
+                DispatchQueue.main.async { completion(.failed("GitHub latest release metadata was invalid.")) }
+                return
+            }
+            let url = URL(string: (object["html_url"] as? String) ?? "") ?? releaseURL
+            let result: ReleaseUpdateResult = isNewer(latest, than: currentVersion)
+                ? .available(version: latest, url: url)
+                : .upToDate
+            DispatchQueue.main.async { completion(result) }
+        }.resume()
+    }
+
+    private static func normalizedVersion(_ value: String) -> String? {
+        let candidate = value.hasPrefix("v") ? String(value.dropFirst()) : value
+        let parts = candidate.split(separator: ".", maxSplits: 2).map(String.init)
+        guard parts.count == 3, Int(parts[0]) != nil, Int(parts[1]) != nil else { return nil }
+        let patch = parts[2].split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? ""
+        guard Int(patch) != nil else { return nil }
+        return candidate
+    }
+
+    private static func isNewer(_ left: String, than right: String) -> Bool {
+        func parts(_ value: String) -> [Int] {
+            let raw = value.hasPrefix("v") ? String(value.dropFirst()) : value
+            return raw.split(separator: ".", maxSplits: 2).map {
+                let numeric = $0.split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? "0"
+                return Int(numeric) ?? 0
+            }
+        }
+        let a = parts(left) + [0, 0, 0]
+        let b = parts(right) + [0, 0, 0]
+        for index in 0..<3 where a[index] != b[index] { return a[index] > b[index] }
+        return false
     }
 }
 
@@ -174,6 +235,8 @@ final class LauncherController {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controller = LauncherController()
+    private let currentVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+    private let updateCheckKey = "CodexBridge.lastUpdateCheck"
     private var statusItem: NSStatusItem!
     private var statusLabel: NSMenuItem!
     private var routeLabel: NSMenuItem!
@@ -189,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         refreshStatus()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refreshStatus() }
+        checkForUpdates(manual: false)
     }
 
     private func buildMenu() {
@@ -209,6 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(menu, "Open Watcher Log", #selector(openWatcherLog))
         add(menu, "Open Launcher Log", #selector(openLauncherLog))
         add(menu, "Open Log Folder", #selector(openLogFolder))
+        add(menu, "Check for Updates...", #selector(checkForUpdates))
         loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         menu.addItem(loginItem)
         menu.addItem(.separator())
@@ -219,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func add(_ menu: NSMenu, _ english: String, _ selector: Selector) {
-        let chinese: [String: String] = ["Ensure Bridge Running": "确保 Bridge 运行", "Restart Bridge": "重启 Bridge", "Restart Codex": "重启 Codex", "Restart CC Switch": "重启 CC Switch", "Open Bridge Log": "打开 Bridge 日志", "Open Watcher Log": "打开 Watcher 日志", "Open Launcher Log": "打开 Launcher 日志", "Open Log Folder": "打开日志目录", "Exit Everything...": "退出全部组件...", "Uninstall CodexBridge...": "卸载 CodexBridge..."]
+        let chinese: [String: String] = ["Ensure Bridge Running": "确保 Bridge 运行", "Restart Bridge": "重启 Bridge", "Restart Codex": "重启 Codex", "Restart CC Switch": "重启 CC Switch", "Open Bridge Log": "打开 Bridge 日志", "Open Watcher Log": "打开 Watcher 日志", "Open Launcher Log": "打开 Launcher 日志", "Open Log Folder": "打开日志目录", "Check for Updates...": "检查更新...", "Exit Everything...": "退出全部组件...", "Uninstall CodexBridge...": "卸载 CodexBridge..."]
         menu.addItem(NSMenuItem(title: controller.copy.text(english, chinese[english] ?? english), action: selector, keyEquivalent: ""))
     }
 
@@ -246,6 +311,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureNoAsDefaultButton(_ alert: NSAlert) {
         alert.buttons.last?.keyEquivalent = "\r"
+    }
+
+    @objc private func checkForUpdates() { checkForUpdates(manual: true) }
+    private func checkForUpdates(manual: Bool) {
+        if !manual && !shouldCheckForUpdates() { return }
+        ReleaseUpdateChecker.check(currentVersion: currentVersion) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .available(let version, let url): self.showUpdatePrompt(version: version, url: url)
+            case .upToDate where manual: self.notify(self.controller.copy.text("CodexBridge is up to date.", "CodexBridge 已是最新版本。"))
+            case .failed(let message) where manual: self.notify(self.controller.copy.text("Could not check for updates: ", "无法检查更新：") + message)
+            default: break
+            }
+        }
+    }
+
+    private func shouldCheckForUpdates() -> Bool {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: updateCheckKey) as? Date
+        if let previous, Date().timeIntervalSince(previous) < 24 * 60 * 60 { return false }
+        defaults.set(Date(), forKey: updateCheckKey)
+        return true
+    }
+
+    private func showUpdatePrompt(version: String, url: URL) {
+        let alert = NSAlert()
+        alert.messageText = controller.copy.text("CodexBridge update available", "CodexBridge 有可用更新")
+        alert.informativeText = controller.copy.text("Version \(version) is available (current \(currentVersion)).", "发现新版本 \(version)（当前为 \(currentVersion)）。")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: controller.copy.text("Open Latest Release", "打开最新版本页面"))
+        alert.addButton(withTitle: controller.copy.text("Later", "稍后"))
+        configureNoAsDefaultButton(alert)
+        if alert.runModal() == .alertFirstButtonReturn { _ = controller.open(url.path.isEmpty ? ReleaseUpdateChecker.releaseURL.absoluteString : url.absoluteString) }
     }
 
     @objc private func ensureBridge() { if !controller.ensureBridge() { notify(controller.copy.text("Could not start the Bridge.", "无法启动 Bridge。")) }; refreshStatus() }
