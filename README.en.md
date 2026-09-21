@@ -1,3 +1,5 @@
+> **This project is under maintenance. Please wait patiently.**
+
 <div align="center">
 
 # CodexBridge
@@ -40,6 +42,24 @@ OpenAI Official
 It is not a model aggregator and does not replace CC Switch. Its job is **session continuity across account-authenticated Official access and API-provider access**.
 
 ## Quick start
+
+> ## ⚠️ Read this first: CodexBridge does not replace CC Switch
+>
+> - **CodexBridge is a compatibility companion for CC Switch, not a replacement.** It only keeps the same Codex conversation usable after a provider switch; it **does not manage providers and does not own routing itself**.
+> - **When you use third-party providers (DeepSeek / GLM / Qwen …), keep CC Switch open the whole time and do not close its routing / local proxy.** Third-party requests must go through CC Switch's local proxy (`127.0.0.1:15721`); if you close CC Switch, the proxy disappears and messages fail to send.
+> - **CodexBridge never revives CC Switch in the background when the proxy drops or you close it, and never selects or launches it via system discovery, a remembered path, or a default install path.** If you close CC Switch by accident, just reopen it to recover; you do not need to restart CodexBridge or Codex. The single exception: in a provably-needed Provider/auth switch repair flow (identical on Windows and macOS), CodexBridge performs one controlled, bounded, loop-free restart of the already-confirmed-and-bound CC Switch instance to repair the login state.
+> - Only the **OpenAI Official** route does not depend on CC Switch and keeps working while CC Switch is closed.
+>
+> Remember it in one line: **CC Switch decides “which provider you switch to”; CodexBridge decides “whether the same conversation can continue afterwards”. For third-party routes you need both.**
+
+### First-time use (correct order)
+
+1. **First decide whether you need CC Switch — it is a routing entry point, not a prerequisite for a Codex conversation to exist or be resumed:**
+   - If you are about to use, or switch to, a **third-party provider configured through CC Switch** (DeepSeek / GLM / Qwen …), **install and open CC Switch first** and configure the providers you want. Adding, removing, and switching providers is always CC Switch's job.
+   - If you are only **signing in to OpenAI Official** and continuing an old Codex conversation, you do **not** need to open CC Switch first just because that conversation once went through a third party. Whether CC Switch is required depends only on “does the current request route through it”, not on “did this historical conversation once use a third party”.
+2. **Then double-click to start CodexBridge**: on Windows double-click `Start CodexBridge.cmd`; on macOS double-click `Start CodexBridge.command`. First run prepares a user-local runtime automatically. **No administrator privileges and no manual Python installation are required.**
+3. **Open Codex and use it normally**. To change provider, switch inside CC Switch; CodexBridge automatically handles Bridge routing, the model list, and any required Codex restart.
+4. **Keep CC Switch open the whole time when using third-party providers**. After startup CodexBridge stays resident in the system tray / menu bar and works in the background, so you never edit `config.toml` by hand and never restart CC Switch after each switch.
 
 ### Easiest path: download a ZIP
 
@@ -93,9 +113,43 @@ Start CodexBridge.command
 
 macOS is currently **Beta**. The Release is not yet Apple Developer signed/notarized, so the filename includes `-unsigned`.
 
-If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper.
+If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper. The startup script **never** silently clears the quarantine flag or changes your system security policy: it opens the menu bar app and then **verifies the process actually started**, printing `[CodexBridge] Ready.` only after it confirms success. If `CodexBridge.app` was blocked by Gatekeeper, the script reports the failure clearly, opens the containing folder for you, and shows a dialog guiding you to **Right-click → Open** that app once (after that one approval it works normally, with no manual `xattr`). See the macOS section below for the full steps.
 
-After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Login starts only the lightweight watcher; when the user opens CC Switch, the watcher starts the CodexBridge menu bar app and Bridge. CodexBridge never launches or restarts CC Switch automatically. Closing the UI does not stop the background Bridge; confirmed `Exit CodexBridge...` stops the full Launcher, Bridge, and CC Switch while keeping the watcher.
+After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Login starts only the lightweight watcher; when the user opens CC Switch, the watcher starts the CodexBridge menu bar app and Bridge. CodexBridge never revives CC Switch in the background on a proxy drop or after you close it, and never launches it via discovery/remembered/default paths; the single exception is the Provider/auth switch repair flow, where - when provably needed - it performs one controlled restart of the currently-bound CC Switch instance to repair the login state (same as Windows). Closing the UI does not stop the background Bridge; confirmed `Exit CodexBridge...` stops the full Launcher, Bridge, and CC Switch while keeping the watcher.
+
+### macOS: prerequisites and first-time use
+
+macOS is currently **Beta / CI-validated**, and the Release is `-unsigned` (not yet Apple Developer signed/notarized). The author has not done on-device regression for every macOS version / chip / Codex version combination, so please note all three when reporting an issue.
+
+First, decide which case applies to you:
+
+- **Case A: OpenAI Official only** (including repairing old conversations that previously went through a third party and stopped sending after switching back to Official) — **you do not need to install CC Switch**.
+- **Case B: switching between Official ↔ third-party providers** — **you must install and run CC Switch**; third-party requests go through its local proxy (`127.0.0.1:15721`).
+
+> CodexBridge does not replace CC Switch: **only third-party routes need CC Switch**, so Official-only use can skip it. For an old Official conversation that once went through a third party, after switching back to Official CodexBridge itself handles the leftover cross-provider state (`previous_response_id` / reasoning / item / tool); you do **not** need to reinstall or reconnect the original third-party provider for it.
+
+#### Case A: Official only (no CC Switch needed)
+
+Prerequisites: Codex is installed and ChatGPT Official sign-in works.
+
+1. Download and extract the package for your chip: Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`; Intel → `CodexBridge-macOS-Intel-unsigned.zip`.
+2. Double-click **`Start CodexBridge.command`**. If Gatekeeper blocks it on first launch, use Finder **Right-click → Open** once on it.
+3. Watch the terminal: **it only truly started when you see `[CodexBridge] Ready.` together with `Menu bar launcher: running`**. If it shows `Launcher failed to start` and reports a Gatekeeper block, the script automatically opens the folder and shows a dialog guiding you: **Right-click → Open** the `CodexBridge.app` inside, then click **Open** again (approve once; do not move it to the Trash, do not disable Gatekeeper, and do not run `xattr` by hand).
+4. Click the **CodexBridge** menu bar icon and confirm **Status = Running** and **Route = Official**.
+5. Open your existing Codex conversation and keep sending.
+
+#### Case B: Official ↔ third-party switching (CC Switch required)
+
+Additional prerequisites: CC Switch is installed and running, its Codex local proxy (`127.0.0.1:15721`) is healthy, and at least one third-party provider (DeepSeek / GLM / Qwen …) is configured in CC Switch.
+
+1. Open **CC Switch** (CodexBridge never launches it via a discovered/default path and never revives it on a drop or after you close it; it only restarts the already-bound instance during a provably-needed switch repair).
+2. Start CodexBridge using Case A steps 1–3. After you open CC Switch, the login watcher also starts CodexBridge automatically on the next CC Switch launch.
+3. Confirm the menu bar shows **Status = Running** and **Route = the current third party**. If it shows **Third-party unavailable (open CC Switch)**, CC Switch is closed or its proxy is not up — just open it; CodexBridge never launches it back.
+4. Switch provider inside **CC Switch**.
+5. Return to the original Codex conversation and keep sending. After a switch you do **not** need to restart CC Switch or edit `config.toml` by hand; if a login-state repair is provably needed, CodexBridge automatically performs one controlled restart of the bound CC Switch instance and reloads Codex (same as Windows).
+
+> **Conversation-migration toggle**: CodexBridge implements cross-provider session continuity on its own and does **not** depend on CC Switch's “conversation migration” toggle. Please note that toggle's state when reporting an issue, but we never insist that you must turn it on or off.
+> The long-term fix is Developer ID signing + notarization (already reserved in CI), after which the “is damaged / right-click to open” step disappears.
 
 ## Everyday use (Windows)
 
@@ -194,7 +248,34 @@ It does not directly rewrite `.codex/sessions`, Codex SQLite history, or `.codex
 <details>
 <summary><strong>Does CC Switch have to stay open?</strong></summary>
 
-Official routing does not depend on CC Switch. Third-party routing uses CC Switch's local proxy; if that proxy disappears while a third-party route is active, the Launcher attempts to restore it.
+Yes when you use third-party providers (DeepSeek / GLM / Qwen …): third-party requests must go through CC Switch's local proxy (`127.0.0.1:15721`). When that proxy disappears CodexBridge only tells you to open CC Switch; it **never revives it on a drop or after you close it, and never launches it via discovery/remembered/default paths**. Reopen CC Switch and the third-party route recovers automatically. The single exception is the Provider/auth switch repair flow (identical on Windows and macOS): when provably needed, CodexBridge performs one controlled restart of the currently-bound CC Switch instance to repair the login state. Only the **OpenAI Official** route does not depend on CC Switch and keeps working while it is closed.
+
+</details>
+
+<details>
+<summary><strong>Why do messages fail after switching to a third party, and why does reopening CC Switch fix it?</strong></summary>
+
+Because the third-party request path is: **Codex → CodexBridge (`127.0.0.1:15722`) → CC Switch local proxy (`127.0.0.1:15721`) → DeepSeek / GLM / Qwen**.
+
+CodexBridge keeps Codex's `base_url` pinned to the local Bridge, so a switch does not leave `base_url` pointing directly at one provider and bypassing the CC Switch proxy (this is exactly why you previously had to restart CC Switch to recover after a third-party switch). But the Bridge does not aggregate models over the internet by itself; it still hands third-party requests to CC Switch's proxy port.
+
+So whenever **CC Switch is not open**, nothing is listening on `127.0.0.1:15721` and third-party messages cannot be sent; **reopening CC Switch recovers it** without restarting CodexBridge or Codex. This is why CodexBridge is a companion to CC Switch, not a replacement.
+
+</details>
+
+<details>
+<summary><strong>Why does restarting only Codex (not CC Switch) after Official → third-party drop me to the login screen?</strong></summary>
+
+**Bottom line: on both Windows and macOS, CodexBridge now completes "restart CC Switch → restart Codex" automatically in the switch repair flow, so you do nothing and never see a login screen.** The manual equivalent is: restart CC Switch, then restart Codex. Only "restarting Codex without restarting CC Switch" drops you to the login screen.
+
+This is a known interaction between CC Switch's credential management and CodexBridge's routing pin, not a broken session continuation:
+
+- CC Switch manages Codex's ChatGPT OAuth itself. When you switch to a third-party provider, it does **not** keep the ChatGPT tokens as live credentials in Codex's `auth.json` (it moves to API-key / managed-stub mode).
+- To keep one conversation usable across providers, CodexBridge pins the active provider to `custom` and always sets `requires_openai_auth = true` (i.e. Codex must use ChatGPT credentials).
+- So in third-party mode the config demands ChatGPT credentials while none are live on disk. A running Codex masks this with its in-memory token; **once you restart Codex**, it re-reads disk credentials → finds none → shows the login screen.
+- Restarting CC Switch (or switching back to Official) restores a consistent credential state, which is why "restart CC Switch" appears to fix it; restarting only Codex exposes the mismatch.
+
+**If you still land on the login screen (e.g. the auto-repair could not complete)**: click "Sign in with ChatGPT" once on the login screen; or reopen CC Switch so it restores a consistent state; or switch back to Official. Afterwards CodexBridge keeps the route pinned to the local Bridge and your conversation is unaffected. By design CodexBridge never writes `auth.json`, so it cannot refill the credential for you; the auto-repair (Windows/macOS) only restarts the bound CC Switch instance and lets CC Switch rewrite the credential itself.
 
 </details>
 

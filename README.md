@@ -1,3 +1,5 @@
+> **项目维护中，请耐心等待。**
+
 <div align="center">
 
 # CodexBridge
@@ -40,6 +42,24 @@ OpenAI Official
 它不是模型聚合器，也不替代 CC Switch；它补的是 **Official 账号态 ↔ API Provider 态之间的会话连续性**。
 
 ## 快速开始
+
+> ## ⚠️ 开始之前必读：CodexBridge 不替代 CC Switch
+>
+> - **CodexBridge 是 CC Switch 的兼容层伴侣，不是替代品。** 它只负责“切 Provider 后尽量续上同一条 Codex 会话”，**不管理 Provider，也不负责路由本身**。
+> - **用第三方 Provider（DeepSeek / GLM / Qwen …）时，请全程保持 CC Switch 开着，不要关闭它的路由 / 本地代理。** 第三方请求必须经过 CC Switch 的本地代理（`127.0.0.1:15721`）才能发出去；一旦关掉 CC Switch，代理消失，消息就会发送失败。
+> - **CodexBridge 不会因为代理掉线或你主动关闭而后台复活 CC Switch，也不会经系统发现 / 历史路径 / 默认安装路径擅自选择并启动它。** 如果不小心关掉了 CC Switch，重新打开它即可恢复，无需重启 CodexBridge 或 Codex。唯一例外：在可证明需要的 Provider/auth 切换修复流程中（Windows 与 macOS 行为一致），CodexBridge 会对当前已确认绑定的同一个 CC Switch 实例执行一次受控、有限、无循环的重启来修复登录态。
+> - 只有 **OpenAI Official** 路由不依赖 CC Switch，可以在 CC Switch 关闭时继续使用。
+>
+> 一句话记忆：**CC Switch 决定“切到哪个 Provider”，CodexBridge 决定“切完还能不能接着聊”；用第三方时两者缺一不可。**
+
+### 第一次使用（正确顺序）
+
+1. **先判断你是否需要 CC Switch——它是“路由入口”，不是 Codex 历史会话存在或恢复的前提：**
+   - 如果你接下来要用、或要切换到**通过 CC Switch 配置的第三方 Provider**（DeepSeek / GLM / Qwen …），就**先安装并打开 CC Switch**，在里面配置好要用的 Provider。Provider 的添加、删除和切换始终由 CC Switch 负责。
+   - 如果你现在**只登录 OpenAI Official**、继续 Codex 里以前的旧会话，**不需要**因为那条会话曾经走过第三方就先开 CC Switch。是否需要 CC Switch，只取决于“当前这条请求是否要走它”，而不取决于“这条历史会话以前是否走过第三方”。
+2. **再双击启动 CodexBridge**：Windows 双击 `Start CodexBridge.cmd`，macOS 双击 `Start CodexBridge.command`。首次运行会自动准备用户级 runtime，**不需要管理员权限，也不需要手动安装 Python**。
+3. **打开 Codex 正常使用**。要换 Provider 时直接在 CC Switch 里切换，CodexBridge 会自动处理 Bridge 路由、模型列表和必要的 Codex 重启。
+4. **用第三方 Provider 时全程保持 CC Switch 开着**。启动后 CodexBridge 常驻系统托盘 / 菜单栏在后台工作，你不需要手动改 `config.toml`，也不需要每次切换后重启 CC Switch。
 
 ### 最省事：下载 ZIP
 
@@ -93,9 +113,43 @@ Start CodexBridge.command
 
 macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因此文件名带 `-unsigned`。
 
-首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。
+首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。脚本**不会**偷偷清除隔离标记或改动系统安全策略：它会打开菜单栏应用并**校验进程是否真的起来**，只有确认成功才显示 `[CodexBridge] Ready.`；万一 `CodexBridge.app` 被 Gatekeeper 拦下，脚本会明确报错、自动打开所在文件夹并弹窗指引你对它 **右键 → 打开** 那一次（放行后即可正常使用，无需手动敲 `xattr`）。完整步骤见下方 macOS 小节。
 
-启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。登录时只运行轻量 watcher；当用户打开 CC Switch，watcher 才启动 CodexBridge 菜单栏应用和 Bridge。CodexBridge 不会自动启动或重启 CC Switch。普通关闭 UI 不会停止后台 Bridge，只有确认 `退出 CodexBridge...` 才会停止完整 Launcher、Bridge 和 CC Switch，同时保留 watcher。
+启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。登录时只运行轻量 watcher；当用户打开 CC Switch，watcher 才启动 CodexBridge 菜单栏应用和 Bridge。CodexBridge 不会因代理掉线或你主动关闭而后台复活 CC Switch，也不会经发现/历史/默认路径擅自启动它；唯一例外是 Provider/auth 切换修复流程：当可证明需要时，它会对当前已绑定的同一个 CC Switch 实例做一次受控重启来修复登录态（与 Windows 一致）。普通关闭 UI 不会停止后台 Bridge，只有确认 `退出 CodexBridge...` 才会停止完整 Launcher、Bridge 和 CC Switch，同时保留 watcher。
+
+### macOS：前提条件与第一次使用
+
+macOS 目前是 **Beta / CI 验证**，Release 为 `-unsigned`（暂未做 Apple Developer 签名/公证）。作者尚未对每一种 macOS 版本 / 芯片 / Codex 版本组合做实机回归，报障时请注明这三项。
+
+先判断你属于哪种情况：
+
+- **情况 A：只用 OpenAI Official**（包括修复“以前经过第三方、切回 Official 就发不出去”的旧会话）——**不需要安装 CC Switch**。
+- **情况 B：要在 Official ↔ 第三方 Provider 之间切换**——**必须安装并运行 CC Switch**，第三方请求要经过它的本地代理（`127.0.0.1:15721`）。
+
+> CodexBridge 不替代 CC Switch：**只有第三方路由需要 CC Switch**，只用 Official 时可以不装。曾经经过第三方的旧 Official 会话，切回 Official 后由 CodexBridge 自行处理 `previous_response_id` / reasoning / item / tool 等跨 Provider 残留，**不需要**为了它重装或重连原来的第三方 Provider。
+
+#### 情况 A：只用 Official（不需要 CC Switch）
+
+前提：Codex 已安装、ChatGPT Official 登录正常。
+
+1. 下载与芯片对应的包并解压：Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`；Intel → `CodexBridge-macOS-Intel-unsigned.zip`。
+2. 双击 **`Start CodexBridge.command`**；首次若被 Gatekeeper 拦，在 Finder 中对它 **右键 → 打开** 一次。
+3. 看终端：**只有出现 `[CodexBridge] Ready.` 且 `Menu bar launcher: running` 才算真的启动成功**。若显示 `Launcher failed to start` 并提示被 Gatekeeper 拦截，脚本会自动打开文件夹并弹窗指引：对里面的 `CodexBridge.app` **右键 → 打开 → 再点“打开”**（放行一次即可，不要移到废纸篓、不要关闭 Gatekeeper、也不用手动敲 `xattr`）。
+4. 点菜单栏 **CodexBridge** 图标，确认 **状态 = 运行中**、**路由 = Official**。
+5. 打开你原来的 Codex 会话，直接继续发送。
+
+#### 情况 B：Official ↔ 第三方切换（需要 CC Switch）
+
+额外前提：CC Switch 已安装并运行、其 Codex 本地代理（`127.0.0.1:15721`）正常、已在 CC Switch 中配好至少一个第三方 Provider（DeepSeek / GLM / Qwen …）。
+
+1. 打开 **CC Switch**（CodexBridge 不会经发现/默认路径擅自启动它，也不会因掉线或你关闭而后台复活；仅在可证明需要的切换修复流程中重启已绑定的同一实例）。
+2. 按情况 A 的步骤 1–3 启动 CodexBridge；打开 CC Switch 后，登录 watcher 也会在下一次 CC Switch 启动时自动拉起 CodexBridge。
+3. 确认菜单栏 **状态 = 运行中**、**路由 = 当前第三方**。若显示 **第三方不可用（请打开 CC Switch）**，说明 CC Switch 没开或代理没起来——打开它即可，CodexBridge 不会反向拉起。
+4. 在 **CC Switch** 里切换 Provider。
+5. 回到原 Codex 会话继续发送。切换后**不需要你手动重启 CC Switch**，也不需要手动改 `config.toml`；若出现需要修复的登录态，CodexBridge 会自动对已绑定的 CC Switch 实例做一次受控重启并重载 Codex（与 Windows 一致）。
+
+> **会话迁移开关**：CodexBridge 自己实现跨 Provider 会话续接，**不依赖** CC Switch 的“会话迁移”开关；报障时请注明它的状态，但我们不会武断要求你必须开或必须关。
+> 长期方案是 Developer ID 签名 + 公证（CI 已预留该流程），届时不再有“已损坏 / 右键打开”这一步。
 
 ## 日常使用（Windows）
 
@@ -194,7 +248,34 @@ CodexBridge 保持稳定的 `custom` provider 身份。**Codex 当前可见的�
 <details>
 <summary><strong>需要一直开着 CC Switch 吗？</strong></summary>
 
-Official 路由不依赖 CC Switch；第三方路由依赖 CC Switch 的本地代理。如果三方路由仍在使用而代理消失，Launcher 会尝试恢复它。
+用第三方 Provider（DeepSeek / GLM / Qwen …）时**需要一直开着**：第三方请求要经过 CC Switch 的本地代理（`127.0.0.1:15721`）才能发出去。代理消失时 CodexBridge 只会提示你打开 CC Switch，**不会因掉线或你主动关闭而后台复活它，也不会经发现/历史/默认路径擅自启动**；重新打开 CC Switch 后，第三方路由会自动恢复。唯一例外是 Provider/auth 切换修复流程（Windows 与 macOS 行为一致）：当可证明需要时，CodexBridge 会对当前已绑定的同一个 CC Switch 实例做一次受控重启来修复登录态。只有 **OpenAI Official** 路由不依赖 CC Switch，可以在它关闭时继续使用。
+
+</details>
+
+<details>
+<summary><strong>为什么切到第三方后消息发不出去，重开 CC Switch 就好了？</strong></summary>
+
+因为第三方请求的链路是：**Codex → CodexBridge（`127.0.0.1:15722`）→ CC Switch 本地代理（`127.0.0.1:15721`）→ DeepSeek / GLM / Qwen**。
+
+CodexBridge 会把 Codex 的 `base_url` 始终固定在本地 Bridge，避免切换后 `base_url` 被改成某个 Provider 的直连地址而绕过 CC Switch 代理（这正是过去“切完第三方要重启 CC Switch 才能恢复”的原因）。但 Bridge 自己并不联网聚合模型，它仍然要把第三方请求交给 CC Switch 的代理端口。
+
+所以只要 **CC Switch 没开着**，`127.0.0.1:15721` 就没人监听，第三方消息发不出去；**重新打开 CC Switch 即可恢复**，不需要重启 CodexBridge 或 Codex。这也说明 CodexBridge 是 CC Switch 的伴侣，而不是替代品。
+
+</details>
+
+<details>
+<summary><strong>为什么 Official → 三方后只重启 Codex（不重启 CC Switch）会掉到登录页？</strong></summary>
+
+**先说结论：在 Windows 和 macOS 上，CodexBridge 现在会在切换修复流程中自动完成“重启 CC Switch → 重启 Codex”，你无需手动操作、也完全不用登录。** 手动等价顺序是：重启 CC Switch，再重启 Codex。只有“只重启 Codex、不重启 CC Switch”才会掉到登录页。
+
+这是 CC Switch 的凭据托管与 CodexBridge 的路由钉住共同造成的**已知行为**，不是会话续接坏了：
+
+- CC Switch 自己托管 Codex 的 ChatGPT OAuth。切到第三方 Provider 时，它**不会**把 ChatGPT tokens 继续保持为 Codex `auth.json` 里的 live 凭据（改走 API-key / 托管存根模式）。
+- CodexBridge 为了让同一条会话跨 Provider 可用，会把 active provider 钉成 `custom` 并恒设 `requires_openai_auth = true`（即要求 Codex 用 ChatGPT 凭据）。
+- 于是三方模式下出现“配置要求 ChatGPT 凭据、但磁盘上没有 live ChatGPT 凭据”。正在运行的 Codex 靠内存里的旧 token 掩盖；**一旦重启 Codex**，它重读磁盘凭据 → 没有 → 掉到登录页。
+- 重启 CC Switch（或切回 Official）会把凭据恢复成一致态，所以“重启 CC Switch”看起来能好；只重启 Codex 则暴露这个不一致。
+
+**如果仍掉到登录页（例如自动修复未能完成）**：在登录页点一次“通过 ChatGPT 登录”；或重开 CC Switch 让它恢复一致态；或切回 Official。恢复后 CodexBridge 会继续把路由钉在本地 Bridge，会话不受影响。CodexBridge 按设计不写 `auth.json`，因此不会替你填回凭据；自动修复（Windows/macOS）也只是重启已绑定的 CC Switch 实例，由 CC Switch 自己重写凭据。
 
 </details>
 
