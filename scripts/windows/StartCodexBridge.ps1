@@ -96,6 +96,49 @@ function Ensure-PortablePython {
     }
 }
 
+function Get-LauncherProcessesInDirectory {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $normalizedRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    @(Get-Process -Name 'CodexBridgeLauncher' -ErrorAction SilentlyContinue) | ForEach-Object {
+        try {
+            $processPath = $_.Path
+            if (-not [string]::IsNullOrWhiteSpace($processPath)) {
+                $processDir = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($processPath))
+                if ([string]::Equals($processDir.TrimEnd('\'), $normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                    $_
+                }
+            }
+        } catch { }
+    }
+}
+
+function Stop-InstalledLauncherProcesses {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $remaining = @(Get-LauncherProcessesInDirectory -InstallRoot $InstallRoot)
+        if ($remaining.Count -eq 0) { return }
+
+        foreach ($process in $remaining) {
+            try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        foreach ($process in $remaining) {
+            try { Wait-Process -Id $process.Id -Timeout 2 -ErrorAction SilentlyContinue | Out-Null } catch { }
+        }
+
+        if ([DateTime]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Milliseconds 200
+    } while ($true)
+
+    $remaining = @(Get-LauncherProcessesInDirectory -InstallRoot $InstallRoot)
+    if ($remaining.Count -gt 0) {
+        $ids = ($remaining | ForEach-Object Id) -join ', '
+        throw "CodexBridge Launcher process(es) did not exit before update: $ids"
+    }
+}
+
 $ProjectRoot = Resolve-CodexBridgeFullPath -Path $ProjectRoot -Fallback (Join-Path $PSScriptRoot '..\..')
 $stateRoot = Join-Path $env:LOCALAPPDATA 'CodexProviderBridge'
 $bootstrapDir = Join-Path $stateRoot 'source-bootstrap'
@@ -114,21 +157,11 @@ $installedAppDir = Join-Path $stateRoot 'app'
 if (Test-Path -LiteralPath $installedAppDir -PathType Container) {
     Write-Host '[CodexBridge] Preparing installed copy for source update...' -ForegroundColor Cyan
 
-    # Stop installed launcher/tray/watcher processes first so the CC Switch
-    # trigger watcher cannot immediately race the Bridge stop and relaunch the
-    # old packaged runtime while this update is being applied.
-    Get-Process -Name 'CodexBridgeLauncher' -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            $processPath = $_.Path
-            if (-not [string]::IsNullOrWhiteSpace($processPath)) {
-                $processDir = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($processPath))
-                if ([string]::Equals($processDir.TrimEnd('\\'), [IO.Path]::GetFullPath($installedAppDir).TrimEnd('\\'), [StringComparison]::OrdinalIgnoreCase)) {
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                }
-            }
-        } catch { }
-    }
-    Start-Sleep -Milliseconds 300
+    # Stop installed launcher/tray/watcher processes first and wait for every
+    # role to exit. This prevents a stale watcher or full Launcher from racing
+    # the copy and relaunching the old runtime during an in-place update.
+    Stop-InstalledLauncherProcesses -InstallRoot $installedAppDir
+    Stop-InstalledLauncherProcesses -InstallRoot $bootstrapDir
 
     $installedManager = Join-Path $installedAppDir 'codex_bridge_manager.ps1'
     if (Test-Path -LiteralPath $installedManager -PathType Leaf) {

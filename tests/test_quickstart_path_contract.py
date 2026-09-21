@@ -41,6 +41,14 @@ class QuickStartPathContractTests(unittest.TestCase):
         self.assertIn("$staleStandaloneBridge = Join-Path $installedAppDir 'codex_provider_bridge.exe'", text)
         self.assertIn("Remove-Item -LiteralPath $staleStandaloneBridge -Force", text)
 
+    def test_source_quickstart_waits_for_old_launcher_roles_before_relaunch(self):
+        text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn("Stop-InstalledLauncherProcesses", text)
+        self.assertIn("Wait-Process", text)
+        self.assertIn("Stop-InstalledLauncherProcesses -InstallRoot $installedAppDir", text)
+
     def test_windows_manager_can_find_bootstrapped_private_python(self):
         text = (ROOT / "scripts" / "windows" / "codex_bridge_manager.ps1").read_text(
             encoding="utf-8-sig"

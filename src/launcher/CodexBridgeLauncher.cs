@@ -1900,7 +1900,9 @@ namespace CodexBridgeLauncherApp
                 {
                     string exePath = Application.ExecutablePath;
                     StaticLauncherLog("CC Switch trigger watcher started. It launches CodexBridge only on a CC Switch start edge.");
-                    bool previousCcSwitchRunning = false;
+                    // Baseline the current state before edge detection. If CC Switch was
+                    // already running when Windows logged in, that is not a new user launch.
+                    bool previousCcSwitchRunning = IsCcSwitchRunning();
                     bool launchAttemptedForRun = false;
                     while (true)
                     {

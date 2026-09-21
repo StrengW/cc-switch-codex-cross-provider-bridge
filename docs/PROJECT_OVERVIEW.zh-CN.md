@@ -131,13 +131,13 @@ durable store 不支持 -> 记为 stateless
 
 ## 生命周期怎么解释
 
-Windows Launcher 常驻托盘，负责观察 Provider 路由和必要的进程恢复。
+Windows 登录时只常驻一个无界面的 CC Switch watcher；完整 Launcher 只在用户启动 CodexBridge 或检测到 CC Switch 的新启动边沿时出现。任务管理器同时看到 watcher 和完整 Launcher 属于两个不同角色，不代表有两个完整 Bridge。
 
 - Official 路径不依赖 CC Switch 一直打开；
 - 第三方路径需要 `127.0.0.1:15721` 的 CC Switch 代理；
-- 第三方代理消失时，Launcher 尝试恢复 CC Switch；
+- 第三方代理消失时，Launcher 只提示用户打开 CC Switch，不会反向启动、重启或杀掉 CC Switch；
 - 真正的 Provider/model 路由变化时才执行对应的刷新/重启策略；
-- `Exit Everything...` 是显式关闭，不等于卸载；
+- `退出 CodexBridge...` 是显式关闭，不等于卸载；Official 路由会先完成直连交接并验证；
 - 卸载会恢复安装前 Codex 配置（能找到快照时），但不会删除聊天记录。
 
 ## 为什么要发布 GitHub Release

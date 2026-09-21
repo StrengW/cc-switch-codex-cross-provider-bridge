@@ -103,6 +103,13 @@ def test_watcher_uses_ccswitch_false_to_true_edge_and_full_launcher_mutex():
     assert "LaunchFullLauncherFromWatcher(exePath);" in watcher
 
 
+def test_watcher_baselines_existing_ccswitch_without_treating_login_as_new_edge():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    watcher = _method_body(text, "private static void RunCcSwitchWatcher()", "private static bool SourceIsNewerThanExe")
+    assert "bool previousCcSwitchRunning = IsCcSwitchRunning();" in watcher
+    assert "bool previousCcSwitchRunning = false;" not in watcher
+
+
 def test_conversation_bridge_core_remains_unchanged():
     assert _normalized_sha256(BRIDGE) == "2f43640afbfa83a687201ed53a9d812d3235e9446c72b9e18d75418ba5d94fab"
 

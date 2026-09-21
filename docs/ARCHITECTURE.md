@@ -119,17 +119,17 @@ This prevents a compatibility mechanism from masking unrelated provider problems
 
 The local Bridge remains the stable compatibility layer at `127.0.0.1:15722`.
 
-When a third-party route is active, the Launcher supervises the CC Switch proxy on `127.0.0.1:15721`. If the proxy disappears, it attempts to restore CC Switch without changing the selected provider/model. Codex is restarted only under the already-tested route/model refresh policy, not merely because the proxy was temporarily unavailable.
+When a third-party route is active, the Launcher observes the CC Switch proxy on `127.0.0.1:15721`. If the proxy disappears, it reports that CC Switch must be opened; it does not launch, restart, or kill CC Switch. Codex is restarted only under the already-tested route/model refresh policy, not merely because the proxy was temporarily unavailable.
 
 Official traffic can continue while CC Switch is closed.
 
-### Exit Everything
+### Exit CodexBridge
 
-The tray action **Exit Everything...**:
+The tray action **Exit CodexBridge...**:
 
 - asks for confirmation;
-- stops the Launcher/Bridge/CC Switch functional components;
-- deliberately leaves Codex and `config.toml` untouched;
+- on Official routes, verifies the direct-Official handoff and restarts Codex before stopping the local Bridge;
+- stops the full Launcher, Bridge, and CC Switch functional components;
 - leaves the lightweight CC Switch trigger watcher armed so a later normal CC Switch launch can relaunch CodexBridge.
 
 It is not an uninstall operation.

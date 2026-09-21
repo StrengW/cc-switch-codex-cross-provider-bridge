@@ -2,6 +2,13 @@
 
 CodexBridge follows semantic public release versions from the repository-root `VERSION` file. Internal component revision labels that may appear in diagnostic logs are implementation markers, not public release versions.
 
+## [Unreleased]
+
+### Fixed
+
+- Windows CC Switch watcher now baselines the current process state at login, so an already-running CC Switch is not mistaken for a new launch that opens the full tray Launcher.
+- The Windows source quick-start updater now waits for old installed and bootstrap Launcher roles to exit before copying and relaunching the updated runtime.
+
 ## [0.1.7] - 2026-09-21
 
 ### Lifecycle

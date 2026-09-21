@@ -105,12 +105,14 @@ After startup, CodexBridge stays in the Windows system tray. Right-click the tra
 - **Restart Codex**: restart Codex manually.
 - **Ensure Bridge Running**: check and recover the Bridge.
 - **Pause automatic restarts**: temporarily pause automatic restart handling.
-- **CC Switch watcher**: only the watcher starts at Windows sign-in; it launches full CodexBridge on a CC Switch not-running→running edge. This behavior is not user-toggleable.
+- **CC Switch watcher (background component; no separate tray action)**: only the lightweight watcher starts at Windows sign-in. If CC Switch is already running, sign-in is not treated as a new-open event; the full CodexBridge starts only on a later not-running→running edge. This behavior is not user-toggleable.
 - **Open Installed App Folder / Open ... Log / Open Log Folder**: open the install directory or logs.
 - **Exit CodexBridge...**: stop the full Launcher, Bridge, and CC Switch. Official routes first hand off `custom` to the direct Official backend; third-party routes stop the Bridge directly. The watcher remains armed, so opening CC Switch later starts CodexBridge again.
 - **Uninstall CodexBridge...**: completely uninstall CodexBridge.
 
 Double-clicking the tray icon opens the log folder directly.
+
+While CodexBridge is active, Task Manager may show two `CodexBridgeLauncher.exe` processes: `--watch-ccswitch` is the invisible background watcher, while `--installed` or `--ccswitch-trigger` is the tray Launcher. They are not two full Bridges; a single-instance mutex allows at most one full Launcher.
 
 ## Uninstall (Windows)
 

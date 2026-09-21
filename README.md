@@ -105,12 +105,14 @@ CodexBridge 启动后会常驻 Windows 系统托盘。右键托盘图标可以�
 - **Restart Codex**：手动重启 Codex。
 - **Ensure Bridge Running**：检查并恢复 Bridge。
 - **Pause automatic restarts**：临时暂停自动重启处理。
-- **CC Switch watcher**：Windows 登录时只启动 watcher；它在 CC Switch 从未运行变为运行时启动完整 CodexBridge。该行为不可切换。
+- **CC Switch watcher（后台组件，无独立菜单按钮）**：Windows 登录时只启动轻量 watcher；如果 CC Switch 已经在运行，登录这一刻不会被当作新的打开事件；之后只有 CC Switch 从未运行变为运行时才启动完整 CodexBridge。该行为不可切换。
 - **Open Installed App Folder / Open ... Log / Open Log Folder**：打开安装目录或日志。
 - **Exit CodexBridge...**：关闭完整 Launcher、Bridge 和 CC Switch；Official 路由会先切换到 `custom` 直连 Official，第三方路由会直接停止 Bridge。watcher 会继续保留，之后重新打开 CC Switch 时 CodexBridge 会自动启动。
 - **Uninstall CodexBridge...**：彻底卸载 CodexBridge。
 
 双击托盘图标会直接打开日志目录。
+
+正常运行时任务管理器可能看到两个 `CodexBridgeLauncher.exe`：`--watch-ccswitch` 是无界面的后台 watcher，`--installed` 或 `--ccswitch-trigger` 是托盘 Launcher。它们不是两个完整 Bridge；完整 Launcher 通过单实例互斥保证最多只有一个。
 
 ## 卸载（Windows）
 
