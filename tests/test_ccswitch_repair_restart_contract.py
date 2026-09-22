@@ -65,7 +65,10 @@ def test_repair_restart_is_bounded_and_relaunches_the_same_bound_path():
     text = _read(LAUNCHER)
     repair = _method_body(text, "private bool RestartBoundCcSwitchInstanceOnce", "private static bool IsTraditionalChineseUiCulture")
     assert "File.Exists(boundPath)" in repair
-    assert "AddSeconds(25)" in repair
+    # Bounded: force-stop the tree (CC Switch ignores a graceful close), wait for it to die,
+    # then relaunch and wait for :15721 -- each with its own deadline, never open-ended.
+    assert "AddSeconds(5)" in repair
+    assert "AddSeconds(20)" in repair
     assert 'WaitForPortClosed("CC Switch", 15721' in repair
     assert "StartDetached(boundPath" in repair
     assert 'TestTcpPort("127.0.0.1", 15721' in repair

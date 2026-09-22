@@ -462,9 +462,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // after the user closes it, and never discovers or launches it from a
     // remembered or default path.
     private func checkProviderSwitchRepair(_ value: BridgeStatus) {
+        // Key the switch edge on the route MODEL -- the provider identity that actually
+        // changes. Runtime evidence on Windows proved the sidecar's source_path is
+        // CONSTANT across providers (CC Switch writes them all into one catalog file), so
+        // route_model is the correct discriminator for Official -> third-party and
+        // third-party -> third-party. Mirrors the Windows launcher.
+        let providerId = value.model ?? ""
         // Flap circuit breaker: measure route stability by the observed key, and
         // re-arm the circuit only after the route has stayed stable long enough.
-        let currentKey = value.route == "Third-party" ? ("third-party|" + (value.model ?? "")) : (value.route == "Official" ? "official" : "unknown")
+        let currentKey = value.route == "Third-party" ? ("third-party|" + providerId) : (value.route == "Official" ? "official" : "unknown")
         if currentKey != observedRouteKey { observedRouteKey = currentKey; routeStableSince = Date() }
         if repairCircuitOpen, let since = routeStableSince, Date().timeIntervalSince(since) >= repairFlapSettleSeconds {
             repairCircuitOpen = false; suppressedRepairCount = 0
@@ -475,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (DeepSeek -> Official -> DeepSeek) is repaired again instead of being
         // blocked by a stale latch.
         guard value.route == "Third-party" else { lastRouteKey = nil; repairDoneKey = nil; pendingRepairReconcileKey = nil; return }
-        let key = "third-party|" + (value.model ?? "")
+        let key = "third-party|" + providerId
         defer { lastRouteKey = key }
         // A genuine new edge, or a deferred reconciliation of a switch whose repair was
         // suppressed earlier. Reconciliation bypasses the same-key guard so a

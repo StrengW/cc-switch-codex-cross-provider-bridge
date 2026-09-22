@@ -64,7 +64,9 @@ def test_ccswitch_stop_paths_are_exit_and_bounded_repair_only():
     assert 'WaitForPortClosed("CC Switch", 15721' in repair
     assert "StartDetached(boundPath" in repair
     assert 'TestTcpPort("127.0.0.1", 15721' in repair
-    assert "AddSeconds(25)" in repair
+    # Bounded: a deadline for the process tree to die and a deadline for :15721 to return.
+    assert "AddSeconds(5)" in repair
+    assert "AddSeconds(20)" in repair
 
     # The proxy supervisor stays observation-only: it never stops/starts CC Switch and
     # never invokes the repair, so a proxy drop or user close cannot revive it.

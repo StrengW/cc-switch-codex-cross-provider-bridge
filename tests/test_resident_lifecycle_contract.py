@@ -145,6 +145,39 @@ def test_restart_codex_never_terminates_an_editor_hosted_backend():
     assert "KillProcessTree" in body
 
 
+def test_route_switch_edge_is_keyed_on_route_model_not_constant_source_path():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    snap = _method_body(text, "private RouteSnapshot ReadRouteSnapshot()", "private bool IsCustomDirectOfficialRoute()")
+    # Runtime evidence (the Route snapshot diagnostic) proved the sidecar's source_path is
+    # CONSTANT across every provider -- CC Switch writes all providers into one
+    # cc-switch-model-catalog.json -- so the switch edge must be keyed on route_model, which
+    # is what actually changes on a real provider switch (Official -> third-party and
+    # third-party -> third-party). Keying on source_path made every third-party provider
+    # share one key, so a third-party -> third-party switch produced no edge at all.
+    assert 'r.Key = kind == "official" ? "official" : "third-party|" + r.Model;' in snap
+    # The source_path-based identity was the wrong discriminator and must be gone.
+    assert "string identity = r.Source.Length > 0 ? r.Source : r.Model;" not in snap
+    assert '"third-party|" + identity' not in snap
+    # A route-snapshot diagnostic lets a switch that fails to trigger be traced to the
+    # exact fields the bridge wrote into the sidecar.
+    poll = _method_body(text, "private void PollTimerTick", "private string FriendlyRoute")
+    assert "Route snapshot: kind=" in poll
+    assert "lastLoggedRouteSig" in poll
+
+
+def test_failed_ccswitch_repair_is_terminal_and_never_reconciles_into_a_loop():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    poll = _method_body(text, "private void PollTimerTick", "private string FriendlyRoute")
+    # A failed CC Switch repair must be TERMINAL for the edge: it notifies once and returns
+    # WITHOUT deferring to reconciliation. Setting pendingRouteReconcileKey on a failed
+    # repair re-fires the same edge, re-arms the one-shot latch, and kills/relaunches CC
+    # Switch forever -- the infinite restart loop observed at runtime (27 kills in ~4 min).
+    fail_branch = poll.split("else if (IsThirdPartyAuthRepairNeeded(route))", 1)[1].split("else", 1)[0]
+    assert "Not reconciling: a failed repair must not retry in a loop." in fail_branch
+    assert "pendingRouteReconcileKey = route.Key" not in fail_branch
+    assert "return;" in fail_branch
+
+
 def test_exit_worker_has_bounded_independent_stop_path_and_continues_after_warnings():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
     stop = _method_body(text, "private void StopBridgeForExit", "private void PrepareDirectOfficialHandoff")

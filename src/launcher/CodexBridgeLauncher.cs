@@ -49,6 +49,7 @@ namespace CodexBridgeLauncherApp
         private string pendingKey = "";
         private DateTime pendingSinceUtc = DateTime.MinValue;
         private bool baselineInitialized;
+        private string lastLoggedRouteSig = "";
         private bool handling;
         private bool thirdPartyProxyUnavailable;
         // Set only while the bounded Provider/auth repair restart is running, so the
@@ -285,6 +286,16 @@ namespace CodexBridgeLauncherApp
             RouteSnapshot route = ReadRouteSnapshot();
             if (route == null) return;
 
+            // Diagnostic: log the raw sidecar identity whenever it changes, so a switch
+            // that fails to trigger can be traced to the exact fields the bridge wrote.
+            string routeSig = route.Kind + "|model=" + route.Model + "|source=" + route.Source;
+            if (routeSig != lastLoggedRouteSig)
+            {
+                lastLoggedRouteSig = routeSig;
+                Log("Route snapshot: kind=" + route.Kind + "; model=" + route.Model +
+                    "; source=" + route.Source + "; key=" + route.Key);
+            }
+
             if (!baselineInitialized)
             {
                 baselineInitialized = true;
@@ -433,11 +444,15 @@ namespace CodexBridgeLauncherApp
                             {
                                 // CC Switch could not be restarted and the credential is
                                 // genuinely absent: reloading Codex now would land on the
-                                // login screen, so skip it, ask the user to reopen CC Switch,
-                                // and defer the edge for reconciliation.
+                                // login screen, so skip it and ask the user to reopen CC
+                                // Switch. This edge is TERMINAL: do NOT set
+                                // pendingRouteReconcileKey here. Deferring a FAILED repair
+                                // to reconciliation re-fires the same edge, re-arms the
+                                // one-shot latch, and kills/relaunches CC Switch forever
+                                // (the observed infinite restart loop). The next genuine
+                                // provider switch re-arms the latch and retries once.
                                 Balloon(ui.T("Provider switch repair"), ui.T("Repair failed: please reopen CC Switch, then switch the provider again."), ToolTipIcon.Warning);
-                                Log("WARNING third-party auth repair did not complete; skipping Codex restart to avoid the login screen.");
-                                pendingRouteReconcileKey = route.Key;
+                                Log("WARNING third-party auth repair did not complete; skipping Codex restart to avoid the login screen. Not reconciling: a failed repair must not retry in a loop.");
                                 return;
                             }
                             else
@@ -507,6 +522,13 @@ namespace CodexBridgeLauncherApp
             r.Kind = kind;
             r.Model = model ?? "";
             r.Source = source ?? "";
+            // Key the switch edge on the route MODEL. Runtime evidence (the "Route
+            // snapshot" diagnostic in PollTimerTick) proved the sidecar's source_path is
+            // CONSTANT across every provider -- CC Switch writes all providers into one
+            // cc-switch-model-catalog.json -- so source_path cannot distinguish one
+            // third-party provider from another, while route_model changes on every real
+            // switch (Official gpt-* -> third-party glm-*/deepseek-*). Kind is folded in
+            // so Official <-> third-party always produces an edge.
             r.Key = kind == "official" ? "official" : "third-party|" + r.Model;
             return r;
         }
@@ -1365,24 +1387,19 @@ namespace CodexBridgeLauncherApp
                 return false;
             }
 
-            DateTime overallDeadline = DateTime.UtcNow.AddSeconds(25);
-            Log("CC Switch repair: stopping the bound instance (graceful then bounded force)...");
+            // CC Switch is a Tauri app that ignores WM_CLOSE (CloseMainWindow only hides
+            // it to the tray), so a graceful stop always times out and wastes the restart
+            // budget. Terminate the whole tree directly -- the approach that reliably
+            // brought :15721 back -- then make sure every child (including WebView2) is
+            // really gone and the port is released before relaunching, so the new instance
+            // is not blocked by a leftover profile/instance lock and its route service binds.
+            Log("CC Switch repair: stopping the bound instance (force; CC Switch ignores a graceful close)...");
             List<Process> processes = FindCcSwitchProcesses();
             for (int i = 0; i < processes.Count; i++)
             {
-                try { if (processes[i].MainWindowHandle != IntPtr.Zero) processes[i].CloseMainWindow(); } catch { }
+                try { if (!processes[i].HasExited) KillProcessTree(processes[i].Id); } catch { }
             }
-            DateTime gracefulDeadline = DateTime.UtcNow.AddSeconds(3);
-            while (DateTime.UtcNow < gracefulDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
-            if (AnyProcessesAlive(processes))
-            {
-                Log("WARNING CC Switch graceful stop timed out during repair; forcing remaining process trees.");
-                for (int i = 0; i < processes.Count; i++)
-                {
-                    try { if (!processes[i].HasExited) KillProcessTree(processes[i].Id); } catch { }
-                }
-            }
-            DateTime processDeadline = DateTime.UtcNow.AddSeconds(3);
+            DateTime processDeadline = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < processDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
             for (int i = 0; i < processes.Count; i++) { try { processes[i].Dispose(); } catch { } }
             WaitForPortClosed("CC Switch", 15721, 5000);
@@ -1394,15 +1411,49 @@ namespace CodexBridgeLauncherApp
                 return false;
             }
 
-            while (DateTime.UtcNow < overallDeadline && !TestTcpPort("127.0.0.1", 15721, 200)) Thread.Sleep(250);
-            if (!TestTcpPort("127.0.0.1", 15721, 200))
+            // CC Switch normally opens :15721 within a few seconds of launch. If it does
+            // not, log whether the relaunched process is even still alive so a silent exit
+            // (single-instance handoff / WebView2 profile lock) is visible in the log.
+            DateTime proxyDeadline = DateTime.UtcNow.AddSeconds(20);
+            int waitedMs = 0;
+            bool proxyUp = TestTcpPort("127.0.0.1", 15721, 200);
+            while (!proxyUp && DateTime.UtcNow < proxyDeadline)
             {
-                Log("WARNING CC Switch repair timed out waiting for proxy :15721 to come back.");
+                Thread.Sleep(500);
+                waitedMs += 500;
+                if (waitedMs % 5000 == 0)
+                    Log("CC Switch repair wait: :15721 still down after " + (waitedMs / 1000) +
+                        "s; cc-switch processes alive=" + CountCcSwitchProcessesQuiet());
+                proxyUp = TestTcpPort("127.0.0.1", 15721, 200);
+            }
+            if (!proxyUp)
+            {
+                Log("WARNING CC Switch repair timed out waiting for proxy :15721 to come back (cc-switch alive=" +
+                    CountCcSwitchProcessesQuiet() + ").");
                 return false;
             }
             Thread.Sleep(1500);
             Log("CC Switch repair completed: bound instance restarted and proxy :15721 is up.");
             return true;
+        }
+
+        // Quiet CC Switch process count for repair diagnostics. FindCcSwitchProcesses logs
+        // every match, which is far too noisy to call inside a wait loop.
+        private int CountCcSwitchProcessesQuiet()
+        {
+            int count = 0;
+            Process[] all = Process.GetProcesses();
+            for (int i = 0; i < all.Length; i++)
+            {
+                try
+                {
+                    string name = all[i].ProcessName ?? "";
+                    if (IsCcSwitchName(name) || IsCcSwitchExecutablePath(SafeProcessPath(all[i]))) count++;
+                }
+                catch { }
+                try { all[i].Dispose(); } catch { }
+            }
+            return count;
         }
 
         private static bool IsTraditionalChineseUiCulture(string cultureName)

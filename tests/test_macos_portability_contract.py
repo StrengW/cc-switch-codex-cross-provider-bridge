@@ -261,6 +261,17 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("Please restart Codex to reload the restored credential.", source)
         self.assertIn("Provider switch repair failed: please reopen CC Switch", source)
 
+    def test_macos_route_edge_keyed_on_route_model_parity(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        # Parity with the Windows launcher: the macOS switch edge keys on route_model, the
+        # provider identity that actually changes. The sidecar's source_path is CONSTANT
+        # across providers (CC Switch writes them all into one catalog file), so it was the
+        # wrong discriminator and must not be used to key the edge.
+        self.assertIn('let providerId = value.model ?? ""', source)
+        self.assertIn('"third-party|" + providerId', source)
+        self.assertNotIn("var source: String?", source)
+        self.assertNotIn('json["source_path"] as? String', source)
+
 
 if __name__ == "__main__":
     unittest.main()
