@@ -255,11 +255,35 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         # A deferred reconcile retry must not count toward the flap threshold.
         self.assertIn("if !isReconcile {", source)
         # Edge-triggered repair parity: the repair restarts CC Switch once and then
-        # asks the user to reload Codex. It never terminates an editor-hosted Codex
+        # raises the durable restart reminder. It never terminates an editor-hosted Codex
         # backend, so a repeat switch cannot make the "click to restart" page flicker.
         self.assertNotIn("codexOk", source)
-        self.assertIn("Please restart Codex to reload the restored credential.", source)
+        self.assertIn("raiseRestartCodexReminder", source)
         self.assertIn("Provider switch repair failed: please reopen CC Switch", source)
+
+    def test_macos_launcher_has_durable_restart_reminder_parity(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        # Windows parity: a one-off alert is easy to miss, so the menu bar also carries a
+        # badge, a tooltip and a bold menu line until the Codex process identity actually
+        # changes, and the alert is pinned above normal windows.
+        self.assertIn("func raiseRestartCodexReminder(", source)
+        self.assertIn("func clearRestartCodexReminder(", source)
+        self.assertIn("func checkPendingRestartApplied()", source)
+        self.assertIn("func checkRouteEdgeReminder(", source)
+        self.assertIn("pendingRestartMenuItem", source)
+        self.assertIn("exclamationmark.circle.fill", source)
+        self.assertIn("alert.window.level = .floating", source)
+        self.assertIn("activate(ignoringOtherApps: true)", source)
+        # The withdrawal check keys on the Codex process identity (PID + start time).
+        self.assertIn("func codexProcessSignature()", source)
+        self.assertIn('"/bin/ps"', source)
+        # One alert at a time; the poll keeps running inside the modal session so a Codex
+        # reload during the alert still withdraws the reminder.
+        self.assertIn("restartDialogOpen", source)
+        self.assertIn(".modalPanel", source)
+        # Official edges must also ask for a reload: nothing else runs for official routes
+        # on macOS, while the Windows launcher asks after every route edge.
+        self.assertIn('kind == "official" && previous != "official"', source)
 
     def test_macos_route_edge_keyed_on_route_model_parity(self):
         source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")

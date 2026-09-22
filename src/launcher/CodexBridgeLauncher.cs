@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -84,12 +85,48 @@ namespace CodexBridgeLauncherApp
         private ToolStripMenuItem statusItem;
         private ToolStripMenuItem pauseItem;
         private bool paused;
+        // Durable "restart Codex" reminder. An editor-hosted Codex backend is never
+        // terminated, so a provider switch only takes effect after the user reloads
+        // Codex. A balloon alone is far too easy to miss: Windows shows it for a few
+        // seconds and keeps no record of it (runtime evidence: the toast is delivered
+        // and cleared ~7s later, and never reaches the notification store). The tray
+        // therefore also carries a badge, a tooltip and a bold menu line until the
+        // Codex process identity actually changes.
+        private ToolStripMenuItem pendingRestartItem;
+        private Icon badgedTrayIcon;
+        private string pendingCodexRestartReason = "";
+        private string pendingCodexProcessSig = "";
+        private DateTime lastPendingCodexCheckUtc = DateTime.MinValue;
+        // Guards the modal restart dialog. Read and written only inside the UI-thread
+        // callback that raises it, so switches arriving while one dialog is already
+        // waiting cannot stack a second dialog on top.
+        private bool restartDialogOpen;
+        // Dedicated UI-thread dispatcher with a real handle, created on the UI thread in
+        // the constructor. The tray menu cannot serve as the dispatcher: its handle is
+        // created lazily on the first right-click and, until then,
+        // ToolStrip.InvokeRequired reports FALSE, so a worker thread (the switch handler
+        // runs on the thread pool) would run the action on itself. A modal dialog created
+        // on a pool thread has no UI message pump and no foreground rights, which is how
+        // the restart reminder ended up behind the user's editor instead of on top of it.
+        private readonly Control uiDispatcher;
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+        private static readonly IntPtr HwndTopMost = new IntPtr(-1);
+        private const uint SwpNoMove = 0x0002;
+        private const uint SwpNoSize = 0x0001;
+        private const uint SwpNoActivate = 0x0010;
         private readonly string installDir;
         private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValueName = "CodexBridgeLauncher";
         public LauncherContext(Mutex singleInstanceMutex)
         {
             mutex = singleInstanceMutex;
+            // Bind the dispatcher to this (UI) thread before any worker can use it.
+            // Control.CreateControl() skips controls that are not visible, so the handle is
+            // forced through the Handle property instead: it creates the handle
+            // unconditionally, on this (UI) thread.
+            uiDispatcher = new Control();
+            uiDispatcher.Handle.ToString();
             baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             codexHome = Path.Combine(userProfile, ".codex");
@@ -141,15 +178,6 @@ namespace CodexBridgeLauncherApp
                     Log("ERROR startup bridge ensure: " + ex);
                     try { Balloon(ui.T("Codex Bridge Launcher"), ui.T("Bridge startup failed. Launcher is still running; open Launcher Log for details."), ToolTipIcon.Error); } catch { }
                 }
-
-                try
-                {
-                    RememberLaunchTargets();
-                }
-                catch (Exception ex)
-                {
-                    Log("WARNING startup launch-target discovery failed: " + ex);
-                }
             });
 
             pollTimer = new System.Windows.Forms.Timer();
@@ -187,6 +215,11 @@ namespace CodexBridgeLauncherApp
             statusItem = new ToolStripMenuItem(ui.T("Status: starting..."));
             statusItem.Enabled = false;
             menu.Items.Add(statusItem);
+            pendingRestartItem = new ToolStripMenuItem(ui.T("Restart Codex in your editor to apply the new provider"));
+            pendingRestartItem.Enabled = false;
+            pendingRestartItem.Visible = false;
+            try { pendingRestartItem.Font = new Font(pendingRestartItem.Font, FontStyle.Bold); } catch { }
+            menu.Items.Add(pendingRestartItem);
             menu.Items.Add(new ToolStripSeparator());
 
             ToolStripMenuItem restartCodex = new ToolStripMenuItem(ui.T("Restart Codex"));
@@ -282,7 +315,11 @@ namespace CodexBridgeLauncherApp
 
         private void PollTimerTick(object sender, EventArgs e)
         {
-            if (exiting || paused) return;
+            if (exiting) return;
+            // Deliberately independent of "paused": this only notices that the user has
+            // already reloaded Codex, so the durable reminder can be withdrawn.
+            ClearPendingCodexRestartIfApplied();
+            if (paused) return;
             RouteSnapshot route = ReadRouteSnapshot();
             if (route == null) return;
 
@@ -759,57 +796,31 @@ namespace CodexBridgeLauncherApp
                 Log("Codex is not running; nothing to restart.");
                 return;
             }
-            bool hadGui = false;
-            string guiExe = "";
-            for (int i = 0; i < processes.Count; i++)
+            // Every current Codex form is a headless "app-server" backend driven by a
+            // GUI host (VS Code/Cursor, or the ChatGPT desktop app): codex.exe itself
+            // never owns a top-level window, so MainWindowHandle is always 0 and there
+            // is no standalone Codex GUI for CodexBridge to cycle. Terminating a
+            // host-owned backend leaves the host on a "click to restart" page, and
+            // because route switches repeat, CodexBridge would keep killing the
+            // respawning backend and make that page flicker between the restart,
+            // restarting and login states. So during normal operation never terminate
+            // it: let the host own its lifecycle and ask the user to restart Codex so
+            // it reloads the new route/credential.
+            if (!exiting)
             {
-                try
-                {
-                    if (processes[i].MainWindowHandle != IntPtr.Zero)
-                    {
-                        hadGui = true;
-                        string path = SafeProcessPath(processes[i]);
-                        if (!string.IsNullOrEmpty(path)) guiExe = path;
-                    }
-                }
-                catch { }
-            }
-
-            // Codex with no GUI window is a headless backend hosted by an editor
-            // (VS Code/Cursor) or a terminal. Terminating it leaves the editor on a
-            // "click to restart" page, and because route switches repeat, CodexBridge
-            // would keep killing the respawning backend, making that page flicker
-            // between the restart, restarting and login states. During normal
-            // operation, never terminate an editor-hosted backend: let the editor own
-            // its lifecycle and ask the user to restart Codex so it reloads the new
-            // route/credential. (The Exit handoff still cycles the process, so that
-            // path is unchanged.)
-            if (!hadGui && !exiting)
-            {
-                Log("Codex is an editor-hosted backend (no GUI window); not terminating it. Please restart Codex to apply: " + reason);
+                Log("Codex is a host-owned app-server backend (no GUI window of its own); not terminating it. Please restart Codex to apply: " + reason);
+                RaisePendingCodexRestart(reason, processes);
+                ShowRestartCodexDialog();
                 Balloon(ui.T("Restart Codex to apply"), ui.T("Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route."), ToolTipIcon.Info);
                 return;
             }
 
-            if (!string.IsNullOrEmpty(guiExe)) SaveStateValue("codex_gui_exe", guiExe);
+            // Exit handoff only (exiting == true): really cycle the backend so the host
+            // respawns it against the direct-Official config. Any outstanding reminder
+            // is stale because this path does restart Codex.
+            ClearPendingCodexRestart();
             for (int i = 0; i < processes.Count; i++) KillProcessTree(processes[i].Id);
             Thread.Sleep(700);
-
-            if (hadGui)
-            {
-                string exe = GetState("codex_gui_exe");
-                if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
-                {
-                    if (StartDetached(exe, null))
-                    {
-                        Log("Codex GUI relaunched.");
-                        return;
-                    }
-                }
-                Log("WARNING Codex GUI was closed but could not be relaunched automatically.");
-                return;
-            }
-
             for (int i = 0; i < 40; i++)
             {
                 Thread.Sleep(250);
@@ -923,23 +934,6 @@ namespace CodexBridgeLauncherApp
             return result;
         }
 
-        private void RememberLaunchTargets()
-        {
-            List<Process> codex = FindCodexProcesses();
-            for (int i = 0; i < codex.Count; i++)
-            {
-                try
-                {
-                    if (codex[i].MainWindowHandle != IntPtr.Zero)
-                    {
-                        string path = SafeProcessPath(codex[i]);
-                        if (!string.IsNullOrEmpty(path)) SaveStateValue("codex_gui_exe", path);
-                    }
-                }
-                catch { }
-            }
-        }
-
         private static string SafeProcessPath(Process p)
         {
             try { return p.MainModule == null ? "" : p.MainModule.FileName; }
@@ -1026,18 +1020,11 @@ namespace CodexBridgeLauncherApp
 
         private void UpdateStatusText(string text)
         {
-            if (tray == null || tray.ContextMenuStrip == null) return;
-            try
+            RunOnUiThread(delegate
             {
-                ToolStrip menu = tray.ContextMenuStrip;
-                if (menu.InvokeRequired)
-                {
-                    menu.BeginInvoke(new Action<string>(UpdateStatusText), text);
-                    return;
-                }
-                statusItem.Text = ui.Status(text);
-            }
-            catch { }
+                if (tray == null || tray.ContextMenuStrip == null) return;
+                try { statusItem.Text = ui.Status(text); } catch { }
+            });
         }
 
         private void Balloon(string title, string message, ToolTipIcon icon)
@@ -1051,6 +1038,205 @@ namespace CodexBridgeLauncherApp
                 tray.ShowBalloonTip(2500);
             }
             catch { }
+        }
+
+        private static string ProcessSignature(List<Process> processes)
+        {
+            StringBuilder signature = new StringBuilder();
+            for (int i = 0; i < processes.Count; i++)
+            {
+                try
+                {
+                    signature.Append(processes[i].Id.ToString(CultureInfo.InvariantCulture));
+                    signature.Append(':');
+                    signature.Append(processes[i].StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
+                    signature.Append('|');
+                }
+                catch { }
+            }
+            return signature.ToString();
+        }
+
+        private string CurrentCodexProcessSignature()
+        {
+            List<Process> processes = FindCodexProcesses();
+            try { return ProcessSignature(processes); }
+            finally
+            {
+                for (int i = 0; i < processes.Count; i++) { try { processes[i].Dispose(); } catch { } }
+            }
+        }
+
+        private Icon BuildBadgedTrayIcon()
+        {
+            try
+            {
+                using (Bitmap canvas = new Bitmap(32, 32))
+                {
+                    using (Graphics g = Graphics.FromImage(canvas))
+                    {
+                        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        using (Bitmap baseIcon = launcherIcon.ToBitmap())
+                        {
+                            g.DrawImage(baseIcon, new Rectangle(0, 0, 32, 32));
+                        }
+                        // Bottom-right red dot: "a provider switch is waiting for you".
+                        using (SolidBrush fill = new SolidBrush(Color.FromArgb(255, 200, 32, 48))) g.FillEllipse(fill, 16, 16, 15, 15);
+                        using (Pen ring = new Pen(Color.White, 2f)) g.DrawEllipse(ring, 17, 17, 13, 13);
+                        // The native handle is intentionally kept for the process lifetime:
+                        // the badge is built at most once and reused by every later reminder.
+                        return Icon.FromHandle(canvas.GetHicon());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING could not build the badged tray icon: " + ex.Message);
+                return null;
+            }
+        }
+
+        private void SetTrayTooltip(string text)
+        {
+            // NotifyIcon.Text throws past 63 characters; clamp rather than lose the badge.
+            try { tray.Text = text.Length > 63 ? text.Substring(0, 63) : text; } catch { }
+        }
+
+        private void RaisePendingCodexRestart(string reason, List<Process> codexProcesses)
+        {
+            pendingCodexRestartReason = reason;
+            pendingCodexProcessSig = ProcessSignature(codexProcesses);
+            RunOnUiThread(delegate
+            {
+                if (tray == null) return;
+                if (badgedTrayIcon == null) badgedTrayIcon = BuildBadgedTrayIcon();
+                if (badgedTrayIcon != null) { try { tray.Icon = badgedTrayIcon; } catch { } }
+                SetTrayTooltip(ui.T("CodexBridge: restart Codex to apply the new provider"));
+                if (pendingRestartItem != null) pendingRestartItem.Visible = true;
+            });
+            UpdateStatusText(ui.T("Waiting for you to restart Codex"));
+            Log("Persistent Codex-restart reminder raised; it stays in the tray until Codex is reloaded: " + reason);
+        }
+
+        private void ShowRestartCodexDialog()
+        {
+            // A modal alert matching the macOS launcher (which already raises its own
+            // alert dialog). The balloon is transient and the tray badge is passive:
+            // neither can interrupt a user who never looks at the tray, so a switch that
+            // only takes effect after reloading Codex could silently stay unapplied.
+            // Raised once per switch edge: while a dialog is already waiting, later
+            // switches only refresh the tray reminder behind it.
+            if (exiting) return;
+            RunOnUiThread(delegate
+            {
+                if (exiting || restartDialogOpen) return;
+                restartDialogOpen = true;
+                try
+                {
+                    ShowRestartCodexDialogCore();
+                }
+                catch (Exception ex) { Log("WARNING could not show the restart-Codex dialog: " + ex.Message); }
+                finally { restartDialogOpen = false; }
+            });
+        }
+
+        private void ShowRestartCodexDialogCore()
+        {
+            // Not MessageBox: an ownerless MessageBox is an ordinary top-level window, and
+            // the Windows foreground lock forbids a background process (this tray launcher)
+            // from activating it, so the dialog opened BEHIND the maximized editor the user
+            // was working in. A WS_EX_TOPMOST window is exempt from that rule: it stays
+            // above every non-topmost window whether or not it is the active window.
+            using (Form dialog = new Form())
+            {
+                dialog.Text = ui.T("Restart Codex to apply");
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.MinimizeBox = false;
+                dialog.MaximizeBox = false;
+                dialog.ShowInTaskbar = true;
+                dialog.TopMost = true;
+                dialog.StartPosition = FormStartPosition.CenterScreen;
+                dialog.ClientSize = new Size(470, 210);
+
+                PictureBox glyph = new PictureBox();
+                glyph.Image = SystemIcons.Warning.ToBitmap();
+                glyph.SizeMode = PictureBoxSizeMode.AutoSize;
+                glyph.Location = new Point(20, 24);
+
+                Label body = new Label();
+                body.Text = ui.T("Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route.")
+                    + "\r\n\r\n"
+                    + ui.T("Codex keeps the previous provider until it is reloaded. The tray warning stays until then, and this reminder returns on the next switch.");
+                body.Location = new Point(74, 22);
+                body.Size = new Size(dialog.ClientSize.Width - 94, dialog.ClientSize.Height - 82);
+
+                Button confirm = new Button();
+                confirm.Text = ui.T("OK");
+                confirm.Size = new Size(88, 28);
+                confirm.Location = new Point(dialog.ClientSize.Width - confirm.Width - 20, dialog.ClientSize.Height - confirm.Height - 16);
+                confirm.DialogResult = DialogResult.OK;
+
+                dialog.Controls.Add(glyph);
+                dialog.Controls.Add(body);
+                dialog.Controls.Add(confirm);
+                dialog.AcceptButton = confirm;
+                dialog.CancelButton = confirm;
+                // Topmost is asserted once at creation; re-assert it after the window is
+                // shown and once a second while it waits. The dialog is the last line of
+                // defence for a switch that only takes effect after a Codex reload, so it
+                // must stay reachable no matter what else the user puts on screen.
+                // SWP_NOACTIVATE keeps the re-assert from stealing keyboard focus.
+                dialog.Shown += delegate
+                {
+                    ReassertTopMost(dialog);
+                    try { dialog.Activate(); } catch { }
+                };
+                System.Windows.Forms.Timer pin = new System.Windows.Forms.Timer();
+                pin.Interval = 1000;
+                pin.Tick += delegate { ReassertTopMost(dialog); };
+                dialog.FormClosed += delegate { pin.Stop(); pin.Dispose(); };
+                pin.Start();
+                dialog.ShowDialog();
+            }
+        }
+
+        private static void ReassertTopMost(Form dialog)
+        {
+            try
+            {
+                if (dialog == null || dialog.IsDisposed || !dialog.IsHandleCreated) return;
+                SetWindowPos(dialog.Handle, HwndTopMost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+            }
+            catch { }
+        }
+
+        private void ClearPendingCodexRestart()
+        {
+            pendingCodexRestartReason = "";
+            pendingCodexProcessSig = "";
+            RunOnUiThread(delegate
+            {
+                if (tray == null) return;
+                try { tray.Icon = launcherIcon; } catch { }
+                SetTrayTooltip(ui.T("Codex Bridge Launcher"));
+                if (pendingRestartItem != null) pendingRestartItem.Visible = false;
+            });
+        }
+
+        private void ClearPendingCodexRestartIfApplied()
+        {
+            if (pendingCodexRestartReason.Length == 0) return;
+            // Throttled: the poll timer ticks every 400ms while a user reload takes
+            // seconds, and enumerating processes is not free.
+            if ((DateTime.UtcNow - lastPendingCodexCheckUtc).TotalSeconds < 2.0) return;
+            lastPendingCodexCheckUtc = DateTime.UtcNow;
+            string current = CurrentCodexProcessSignature();
+            if (current.Length == 0) return;               // Codex is not up yet; keep waiting.
+            if (current == pendingCodexProcessSig) return; // Unchanged; the reminder still applies.
+            Log("Codex was reloaded by the user; clearing the persistent restart reminder (was: " + pendingCodexRestartReason + ").");
+            ClearPendingCodexRestart();
+            UpdateStatusText(ui.T("Watching provider switches"));
         }
 
         private void CheckForUpdates(bool manual)
@@ -1136,9 +1322,8 @@ namespace CodexBridgeLauncherApp
         {
             try
             {
-                ToolStrip menu = tray == null ? null : tray.ContextMenuStrip;
-                if (menu == null || menu.IsDisposed) return;
-                if (menu.InvokeRequired) { menu.BeginInvoke(action); return; }
+                if (action == null) return;
+                if (uiDispatcher.InvokeRequired) { uiDispatcher.BeginInvoke(action); return; }
                 action();
             }
             catch (Exception ex) { Log("WARNING update UI callback failed: " + ex.Message); }
@@ -1870,7 +2055,7 @@ namespace CodexBridgeLauncherApp
         {
             string json = ReadTextFileSafe(statePath);
             if (string.IsNullOrEmpty(json)) return;
-            string[] keys = new string[] { "codex_gui_exe", "last_handled_route", "update_checked_at_utc", "latest_release_version", "latest_release_url" };
+            string[] keys = new string[] { "last_handled_route", "update_checked_at_utc", "latest_release_version", "latest_release_url" };
             for (int i = 0; i < keys.Length; i++)
             {
                 string v = JsonString(json, keys[i]);

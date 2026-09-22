@@ -86,6 +86,11 @@ namespace CodexBridgeLauncherApp
                 case "The provider route kept flipping, so CodexBridge paused automatic Codex restarts to avoid a restart loop. Reopen CC Switch, then switch the provider once more; CodexBridge resumes automatically.": return Z("Provider 路由反复抖动，CodexBridge 已暂停自动重启 Codex 以避免重启循环。请重新打开 CC Switch，然后再切换一次 Provider；CodexBridge 会自动恢复。", "Provider 路由反覆抖動，CodexBridge 已暫停自動重新啟動 Codex 以避免重新啟動循環。請重新開啟 CC Switch，然後再切換一次 Provider；CodexBridge 會自動恢復。");
                 case "Restart Codex to apply": return Z("请重启 Codex 以生效", "請重新啟動 Codex 以生效");
                 case "Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route.": return Z("Provider 已切换。请在你的编辑器（VS Code/Cursor）中重启 Codex 以应用新路由。", "Provider 已切換。請在你的編輯器（VS Code/Cursor）中重新啟動 Codex 以套用新路由。");
+                case "Codex keeps the previous provider until it is reloaded. The tray warning stays until then, and this reminder returns on the next switch.": return Z("重启前 Codex 仍使用旧 Provider。托盘警告会一直保留，下次切换 Provider 时也会再次提醒。", "重新啟動前 Codex 仍使用舊 Provider。系統匣警告會一直保留，下次切換 Provider 時也會再次提醒。");
+                case "Restart Codex in your editor to apply the new provider": return Z("请在编辑器中重启 Codex 以应用新 Provider", "請在編輯器中重新啟動 Codex 以套用新 Provider");
+                case "CodexBridge: restart Codex to apply the new provider": return Z("CodexBridge：请重启 Codex 以应用新 Provider", "CodexBridge：請重新啟動 Codex 以套用新 Provider");
+                case "Waiting for you to restart Codex": return Z("等待你重启 Codex", "等待你重新啟動 Codex");
+                case "OK": return Z("确定", "確定");
                 default: return english;
             }
         }

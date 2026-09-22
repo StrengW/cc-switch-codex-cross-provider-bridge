@@ -3918,7 +3918,27 @@ class CatalogConfigGuard:
         # not become a provider change.
         with self.route_lock:
             known_route = self.route_kind
-        if not known_route:
+            known_route_models = set(self.route_models)
+        # CC Switch can persist a Codex config template that already points at the
+        # bridge (model_provider and base_url unchanged), so a provider switch no
+        # longer exposes the config transient this guard originally watched for.
+        # The rewrite still selects a model the current route cannot offer, while a
+        # real in-picker change always stays inside the models this route published:
+        # a selected model outside the known route models is a provider switch edge.
+        foreign_model = bool(
+            known_route
+            and selected_model
+            and known_route_models
+            and selected_model not in known_route_models
+        )
+        if not known_route or foreign_model:
+            if known_route:
+                print(
+                    "Provider-scoped catalog guard: selected model "
+                    f"{selected_model!r} is not offered by the current route; "
+                    "re-inferring the upstream route.",
+                    flush=True,
+                )
             if _looks_official_model(selected_model):
                 models: set[str] = set()
                 if self.bundled_catalog_path.is_file():

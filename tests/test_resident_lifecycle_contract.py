@@ -131,18 +131,134 @@ def test_route_switch_restart_has_flap_circuit_breaker():
 def test_restart_codex_never_terminates_an_editor_hosted_backend():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
     body = _method_body(text, "private void RestartCodex(string reason", "private bool RestartCodexForRouteSwitch")
-    # A headless Codex (no GUI window) is an editor-hosted backend (VS Code/Cursor).
-    # During normal operation it is never terminated: killing it leaves the editor on a
-    # "click to restart" page and, because route switches repeat, CodexBridge would keep
-    # killing the respawning backend and make that page flicker between the restart,
-    # restarting and login states. Instead the user is asked to restart Codex so the
-    # editor owns its own lifecycle.
-    assert "MainWindowHandle" in body
-    assert "if (!hadGui && !exiting)" in body
-    assert "editor-hosted backend" in body
+    # Every current Codex form is a headless "app-server" backend owned by a GUI host
+    # (VS Code/Cursor, or the ChatGPT desktop app). codex.exe never owns a top-level
+    # window, so during normal operation the backend is never terminated: killing it
+    # leaves the host on a "click to restart" page and, because route switches repeat,
+    # CodexBridge would keep killing the respawning backend and make that page flicker
+    # between the restart, restarting and login states. Instead the user is asked to
+    # restart Codex so the host owns its own lifecycle.
+    assert "if (!exiting)" in body
+    assert "host-owned app-server backend" in body
     assert 'ui.T("Restart Codex to apply")' in body
-    # The GUI path still cycles the process, and the Exit handoff (exiting) is unchanged.
+    # The Exit handoff (exiting == true) still cycles the backend and waits for the
+    # host to respawn it, so that path is unchanged.
     assert "KillProcessTree" in body
+    assert "Codex backend respawned by its host." in body
+
+
+def test_dead_standalone_gui_restart_code_is_removed():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    # codex.exe is always a headless app-server backend (it never owns a top-level
+    # window), so the old "remember the GUI exe, then kill and relaunch it" machinery
+    # could never fire: the hadGui flag was permanently false and the relaunch branch
+    # was unreachable. It is removed entirely so the code no longer advertises an
+    # auto-restart path that does not exist; the restart decision now keys only on
+    # exiting (normal switch = remind the user, Exit handoff = cycle the backend).
+    assert "hadGui" not in text
+    assert "RememberLaunchTargets" not in text
+    assert "codex_gui_exe" not in text
+    assert "Codex GUI relaunched" not in text
+    assert "Codex GUI was closed" not in text
+    # RestartCodex no longer probes the process window handle to pick the restart path.
+    # Match the probe expression, not the bare word: the explanatory comment still says
+    # "MainWindowHandle is always 0", and the CC Switch stop path calls CloseMainWindow().
+    body = _method_body(text, "private void RestartCodex(string reason", "private bool RestartCodexForRouteSwitch")
+    assert "processes[i].MainWindowHandle" not in body
+
+
+def test_editor_hosted_restart_reminder_is_durable_not_only_a_transient_balloon():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    body = _method_body(text, "private void RestartCodex(string reason", "private bool RestartCodexForRouteSwitch")
+    # Runtime evidence: a Win32 tray balloon is delivered and then cleared about seven
+    # seconds later, and never reaches the notification store, so a balloon alone is far
+    # too easy to miss and leaves no trace. The editor-hosted branch must therefore also
+    # raise a durable tray reminder before it notifies.
+    assert "RaisePendingCodexRestart(reason, processes)" in body
+    assert body.index("RaisePendingCodexRestart(reason, processes)") < body.index('ui.T("Restart Codex to apply")')
+    # The path that really cycles Codex withdraws any outstanding reminder.
+    assert "ClearPendingCodexRestart();" in body
+
+    raise_body = _method_body(text, "private void RaisePendingCodexRestart", "private void ClearPendingCodexRestart()")
+    assert "badgedTrayIcon" in raise_body
+    assert "SetTrayTooltip" in raise_body
+    assert "pendingRestartItem.Visible = true" in raise_body
+    # The reminder is keyed on the Codex process identity captured at raise time.
+    assert "ProcessSignature(codexProcesses)" in raise_body
+    # NotifyIcon.Text throws past 63 characters, so the tooltip is clamped instead.
+    assert "text.Length > 63" in text
+
+    # Withdrawn only when the Codex process identity actually changed (user reloaded).
+    clear_body = _method_body(text, "private void ClearPendingCodexRestartIfApplied", "private void CheckForUpdates")
+    assert "CurrentCodexProcessSignature()" in clear_body
+    assert "current == pendingCodexProcessSig" in clear_body
+    assert "ClearPendingCodexRestart();" in clear_body
+    # Throttled: the poll timer ticks every 400ms, so process enumeration is rate limited.
+    assert "lastPendingCodexCheckUtc" in clear_body
+
+    # The poll tick withdraws the reminder even while automatic restarts are paused.
+    head = text.index("private void PollTimerTick")
+    poll_head = text[head:head + 600]
+    assert poll_head.index("ClearPendingCodexRestartIfApplied()") < poll_head.index("if (paused) return;")
+
+    # Every new user-visible string is localized (simplified and traditional).
+    ui_text = (ROOT / "src" / "launcher" / "LauncherUiText.cs").read_text(encoding="utf-8-sig")
+    for key in (
+        "Restart Codex in your editor to apply the new provider",
+        "CodexBridge: restart Codex to apply the new provider",
+        "Waiting for you to restart Codex",
+    ):
+        assert 'case "' + key + '"' in ui_text
+
+
+def test_editor_hosted_switch_raises_a_modal_restart_dialog():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    body = _method_body(text, "private void RestartCodex(string reason", "private bool RestartCodexForRouteSwitch")
+    # A tray badge is passive and a balloon is transient: neither interrupts a user who
+    # never looks at the tray, so a switch that only takes effect after reloading Codex
+    # could silently stay unapplied. The macOS launcher already raises a modal alert, so
+    # the editor-hosted branch must match it and interrupt actively.
+    assert "ShowRestartCodexDialog();" in body
+    assert body.index("RaisePendingCodexRestart(reason, processes)") < body.index("ShowRestartCodexDialog();")
+    # Only the editor-hosted branch interrupts: the GUI path cycles Codex itself.
+    assert body.index("ShowRestartCodexDialog();") < body.index("ClearPendingCodexRestart();")
+
+    dialog = _method_body(text, "private void ShowRestartCodexDialog()", "private void ClearPendingCodexRestart()")
+    # The alert must be a topmost window, not MessageBox: an ownerless MessageBox is an
+    # ordinary top-level window, and the Windows foreground lock forbids a background
+    # process (this tray launcher) from activating it, so runtime evidence showed the
+    # dialog opening BEHIND the maximized editor the user was working in. A WS_EX_TOPMOST
+    # window stays above every non-topmost window regardless of activation.
+    assert "dialog.TopMost = true;" in dialog
+    assert "ShowDialog();" in dialog
+    assert "SystemIcons.Warning.ToBitmap()" in dialog
+    assert "MessageBox.Show(" not in dialog
+    assert 'ui.T("Restart Codex to apply")' in dialog
+    # One dialog at a time: the guard runs on the UI thread inside the callback, so
+    # switches arriving while a dialog is already waiting cannot stack a second dialog.
+    assert "private bool restartDialogOpen;" in text
+    assert "if (exiting || restartDialogOpen) return;" in dialog
+    assert "restartDialogOpen = false;" in dialog
+    # Topmost is re-asserted after the dialog is shown and once a second while it waits,
+    # without stealing focus: the Z order must not depend on activation. A dialog created
+    # on the UI (STA) thread is required for any of this to hold; the tray menu cannot
+    # act as the dispatcher because its handle is created lazily and
+    # ToolStrip.InvokeRequired then reports FALSE on worker threads -- which is how the
+    # switch handler (thread pool) once ran the modal dialog on a pool thread with no UI
+    # message pump and no foreground rights, leaving it behind the maximized editor.
+    assert "ReassertTopMost(dialog)" in dialog
+    assert "SetWindowPos(dialog.Handle, HwndTopMost" in text
+    assert "SwpNoActivate" in text
+    assert "private readonly Control uiDispatcher;" in text
+    assert "uiDispatcher.Handle.ToString();" in text
+    runner = _method_body(text, "private void RunOnUiThread", "private void StopBridgeForUpdate")
+    assert "uiDispatcher.InvokeRequired" in runner
+    assert "menu.BeginInvoke" not in runner
+    # The dialog body is localized alongside every other reminder string, and so is the
+    # confirm button (a plain MessageBox would have localized it for us).
+    ui_text = (ROOT / "src" / "launcher" / "LauncherUiText.cs").read_text(encoding="utf-8-sig")
+    assert 'case "Codex keeps the previous provider until it is reloaded.' in ui_text
+    assert 'case "OK":' in ui_text
 
 
 def test_route_switch_edge_is_keyed_on_route_model_not_constant_source_path():
@@ -220,13 +336,30 @@ def test_watcher_baselines_existing_ccswitch_without_treating_login_as_new_edge(
     assert "bool previousCcSwitchRunning = false;" not in watcher
 
 
+def test_bridge_reinfers_route_when_selected_model_is_foreign():
+    # Runtime evidence (40ms sampling of a live switch): CC Switch now persists a
+    # Codex config template that already points at the bridge, so a provider switch
+    # writes model_provider/base_url unchanged and only swaps the selected model and
+    # the catalog reference. The guard must treat a selected model outside the
+    # current route models as a switch edge, because a real in-picker change always
+    # stays inside the models this route published.
+    text = BRIDGE.read_text(encoding="utf-8-sig")
+    guard = _method_body(text, "    def guard_once(self) -> None:", "    def _run(self) -> None:")
+    assert "known_route_models = set(self.route_models)" in guard
+    assert "selected_model not in known_route_models" in guard
+    assert "if not known_route or foreign_model:" in guard
+    assert "is not offered by the current route" in guard
+
+
 def test_conversation_bridge_core_remains_unchanged():
     # Re-baselined for the sanctioned diagnostic-log sanitizer layer only
-    # (_sanitize_log_text/_log plus wrapped print sites). The conversation
-    # continuation core (resp_/msg_ mapping, provider continuation, resident-WS,
-    # portable replay, compatibility firewall, strict tool repair, CompHash) is
-    # unchanged.
-    assert _normalized_sha256(BRIDGE) == "5d418498317fca43e6f8da9cbcef12f6ca4cbea737e98829845943effadfc351"
+    # (_sanitize_log_text/_log plus wrapped print sites), and again for the
+    # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once (a
+    # selected model outside the known route models is a provider switch edge).
+    # The conversation continuation core (resp_/msg_ mapping, provider
+    # continuation, resident-WS, portable replay, compatibility firewall, strict
+    # tool repair, CompHash) is unchanged.
+    assert _normalized_sha256(BRIDGE) == "34b581c3ae07faa211a43a427a51ef88d0bc6356c92fbdb27dc01f5c60cbff84"
 
 
 def test_manager_core_remains_unchanged():

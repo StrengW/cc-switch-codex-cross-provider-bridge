@@ -277,6 +277,26 @@ final class LauncherController {
 
     // MARK: Provider/auth switch repair (read-only detection + bounded bound restart)
 
+    // Process identity of the editor-hosted Codex backend(s): PID plus start time, so a
+    // reload (a fresh identity) can be told apart from the still-running old backend.
+    // Read-only; used only to withdraw the restart reminder.
+    func codexProcessSignature() -> String {
+        let result = runner.run("/bin/ps", ["-ax", "-o", "pid=,lstart=,comm="], timeout: 3)
+        guard result.status == 0 else { return "" }
+        var entries: [String] = []
+        for line in result.output.split(separator: "\n") {
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard fields.count >= 7 else { continue }
+            let pid = String(fields[0])
+            let started = fields[1...5].map(String.init).joined(separator: " ")
+            let command = fields[6...].map(String.init).joined(separator: " ")
+            if (command as NSString).lastPathComponent == "codex" {
+                entries.append(pid + "@" + started)
+            }
+        }
+        return entries.sorted().joined(separator: ",")
+    }
+
     // Read-only: the repair is provably needed when the pinned custom provider
     // requires OpenAI auth but ~/.codex/auth.json has no live ChatGPT credential.
     // Never writes auth.json and never logs token values.
@@ -378,6 +398,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let repairFlapThreshold = 3
     private let repairFlapSettleSeconds: TimeInterval = 15
 
+    // Durable "restart Codex" reminder (Windows parity). An editor-hosted Codex backend
+    // is never terminated, so a switch only takes effect after the user reloads Codex.
+    // The menu bar icon, its tooltip and a bold menu line keep the reminder visible
+    // until the Codex process identity actually changes; a modal alert interrupts once
+    // per switch edge on top of that.
+    private var pendingCodexRestartReason = ""
+    private var pendingCodexProcessSignature = ""
+    private var lastPendingRestartCheckAt = Date.distantPast
+    private var restartDialogOpen = false
+    private var pendingRestartMenuItem: NSMenuItem?
+    private var observedRouteForReminder = "none"
+    private var reminderBaselineDone = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -386,7 +419,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         refreshStatus()
         ensureBridgeOnLaunch()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refreshStatus() }
+        // Added to the modal-panel run loop mode as well, so the poll keeps running while
+        // the restart dialog is up (Windows parity: its WinForms timer keeps ticking
+        // inside the modal message loop). Without this, a Codex reload during the dialog
+        // would not withdraw the reminder until the dialog is dismissed.
+        let statusTimer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.refreshStatus() }
+        RunLoop.main.add(statusTimer, forMode: .common)
+        RunLoop.main.add(statusTimer, forMode: .modalPanel)
+        timer = statusTimer
         checkForUpdates(manual: false)
     }
 
@@ -398,6 +438,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLabel = NSMenuItem(title: "Status: Unknown", action: nil, keyEquivalent: "")
         routeLabel = NSMenuItem(title: "Route: Unknown", action: nil, keyEquivalent: "")
         menu.addItem(statusLabel); menu.addItem(routeLabel)
+        // Bold reminder line, hidden until a switch needs a Codex reload. Mirror of the
+        // Windows launcher's persistent menu line.
+        let reminder = NSMenuItem(title: controller.copy.text("Restart Codex to apply", "请重启 Codex 以生效"), action: nil, keyEquivalent: "")
+        reminder.isHidden = true
+        reminder.attributedTitle = NSAttributedString(string: reminder.title, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
+        pendingRestartMenuItem = reminder
+        menu.addItem(reminder)
         menu.addItem(.separator())
         add(menu, "Ensure Bridge Running", #selector(ensureBridge))
         add(menu, "Restart Bridge", #selector(restartBridge))
@@ -451,7 +498,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let item = modelLabel, let index = statusItem.menu?.index(of: item), index >= 0 {
             statusItem.menu?.removeItem(at: index); modelLabel = nil
         }
+        checkRouteEdgeReminder(value)
         checkProviderSwitchRepair(value)
+        checkPendingRestartApplied()
     }
 
     // Provider/auth switch repair (macOS parity with the Windows launcher).
@@ -542,12 +591,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.repairInProgress = false
                 self.repairDoneKey = key
                 if ok {
-                    self.notify(self.controller.copy.text("Provider switch repaired: CC Switch was restarted once. Please restart Codex to reload the restored credential.", "已修复 Provider 切换：CC Switch 已重启一次。请重启 Codex 以重新加载恢复后的凭据。"))
+                    self.raiseRestartCodexReminder(self.controller.copy.text("Provider switch repaired: CC Switch was restarted once", "已修复 Provider 切换：CC Switch 已重启一次"))
                 } else {
                     self.notify(self.controller.copy.text("Provider switch repair failed: please reopen CC Switch, then switch the provider again.", "Provider 切换修复失败：请重新打开 CC Switch，然后再次切换 Provider。"))
                 }
                 self.refreshStatus()
             }
+        }
+    }
+
+    // Windows parity: EVERY genuine switch edge asks the user to reload Codex. The
+    // third-party path below runs the repair and raises the reminder itself; this covers
+    // the official edge, where nothing else would tell the user that the config changed.
+    private func checkRouteEdgeReminder(_ value: BridgeStatus) {
+        let kind = value.route == "Official" ? "official" : (value.route == "Third-party" ? "third-party" : "none")
+        let previous = observedRouteForReminder
+        observedRouteForReminder = kind
+        // The first observation after launch only sets the baseline (no edge yet).
+        if !reminderBaselineDone { reminderBaselineDone = true; return }
+        if kind == "official" && previous != "official" {
+            raiseRestartCodexReminder(controller.copy.text("Official route / ChatGPT account reload", "官方路由 / ChatGPT 账号重新加载"))
+        }
+    }
+
+    // Windows parity: the reminder is withdrawn only when the Codex process identity
+    // really changed (the user reloaded it), never merely because the route changed.
+    private func checkPendingRestartApplied() {
+        guard !pendingCodexRestartReason.isEmpty else { return }
+        // Throttled: refreshStatus runs on a 5 s timer and enumerating processes is not free.
+        if Date().timeIntervalSince(lastPendingRestartCheckAt) < 2 { return }
+        lastPendingRestartCheckAt = Date()
+        let current = controller.codexProcessSignature()
+        if current.isEmpty { return }                          // Codex is not up yet; keep waiting.
+        if current == pendingCodexProcessSignature { return }  // Unchanged; the reminder still applies.
+        logLauncher("Codex was reloaded by the user; clearing the persistent restart reminder (was: \(pendingCodexRestartReason)).")
+        clearRestartCodexReminder()
+    }
+
+    private func raiseRestartCodexReminder(_ reason: String) {
+        pendingCodexRestartReason = reason
+        pendingCodexProcessSignature = controller.codexProcessSignature()
+        statusItem.button?.image = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "CodexBridge")
+        statusItem.button?.image?.isTemplate = true
+        statusItem.button?.toolTip = controller.copy.text("CodexBridge: restart Codex to apply the new provider", "CodexBridge：请重启 Codex 以应用新 Provider")
+        pendingRestartMenuItem?.isHidden = false
+        logLauncher("Persistent Codex-restart reminder raised; it stays in the menu bar until Codex is reloaded: \(reason)")
+        // One alert at a time: later switches refresh the menu bar reminder behind it
+        // instead of stacking dialogs. The modal run loop keeps running (modalPanel mode),
+        // so the badge and the withdrawal check stay live while the alert blocks.
+        if restartDialogOpen { return }
+        restartDialogOpen = true
+        defer { restartDialogOpen = false }
+        showRestartCodexDialog()
+    }
+
+    private func clearRestartCodexReminder() {
+        pendingCodexRestartReason = ""
+        pendingCodexProcessSignature = ""
+        statusItem.button?.image = NSImage(systemSymbolName: "link", accessibilityDescription: "CodexBridge")
+        statusItem.button?.image?.isTemplate = true
+        statusItem.button?.toolTip = nil
+        pendingRestartMenuItem?.isHidden = true
+    }
+
+    private func showRestartCodexDialog() {
+        let alert = NSAlert()
+        alert.messageText = controller.copy.text("Restart Codex to apply", "请重启 Codex 以生效")
+        alert.informativeText = controller.copy.text("Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route.", "Provider 已切换。请在你的编辑器（VS Code/Cursor）中重启 Codex 以应用新路由。")
+            + "\n\n"
+            + controller.copy.text("Codex keeps the previous provider until it is reloaded. The menu bar warning stays until then, and this reminder returns on the next switch.", "重启前 Codex 仍使用旧 Provider。菜单栏警告会一直保留，下次切换 Provider 时也会再次提醒。")
+        alert.alertStyle = .warning
+        // Windows parity: the reminder must land on top of whatever the user is working
+        // in, so the app is activated and the alert is pinned above normal windows.
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        alert.window.level = .floating
+        alert.runModal()
+    }
+
+    private func logLauncher(_ message: String) {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(stamp) \(message)\n".data(using: .utf8) else { return }
+        let path = controller.paths.launcherLog
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
         }
     }
 

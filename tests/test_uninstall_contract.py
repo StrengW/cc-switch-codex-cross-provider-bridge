@@ -78,7 +78,8 @@ def test_repo_contains_fallback_uninstall_cmd():
 
 
 def test_uninstall_feature_does_not_modify_bridge_or_manager_core():
-    # Bridge re-baselined for the sanctioned diagnostic-log sanitizer layer only;
+    # Bridge re-baselined for the sanctioned diagnostic-log sanitizer layer and the
+    # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once;
     # conversation-continuation core logic is unchanged. Manager core untouched.
-    assert _normalized_sha256(BRIDGE) == "5d418498317fca43e6f8da9cbcef12f6ca4cbea737e98829845943effadfc351"
+    assert _normalized_sha256(BRIDGE) == "34b581c3ae07faa211a43a427a51ef88d0bc6356c92fbdb27dc01f5c60cbff84"
     assert _normalized_sha256(MANAGER) == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"
