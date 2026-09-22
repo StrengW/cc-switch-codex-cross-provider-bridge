@@ -21,6 +21,20 @@ A useful report includes:
 
 The Bridge is designed to listen on loopback (`127.0.0.1`) for its normal local workflow. Do not expose the Bridge or the CC Switch local proxy directly to the public internet.
 
+## Diagnostic logs and automatic redaction
+
+CodexBridge tries to avoid recording chat bodies and provider credentials, and it automatically redacts persistent logs before they are written. The launcher (`launcher.log`, manager stdout/stderr, and exception details) and the bridge (`bridge-stdout.log`, `bridge-stderr.log`) pass diagnostic text through a shared sanitizer that masks:
+
+- `Authorization` / `Proxy-Authorization` headers and `Bearer` / `Basic` credentials;
+- key/value and JSON secrets such as `api_key`, `access_token`, `refresh_token`, `session_token`, `id_token`, `secret`, `password`, and `token`;
+- `sk-*` API keys, JWT-shaped strings, and `Cookie` / `Set-Cookie` values;
+- credentials embedded in URLs (`user:pass@`) and sensitive query parameters (`token`, `key`, `api_key`, `code`, `secret`, `signature`);
+- personal paths (`/Users/<name>/` -> `/Users/<user>/`, `C:\Users\<name>\` -> `C:\Users\<user>\`) and email addresses.
+
+Non-secret diagnostic fields are preserved on purpose: timestamps, route, provider/model, HTTP status codes, retry/fallback markers, counters, fingerprints, and port state.
+
+Even with automatic redaction, **treat raw on-disk logs as sensitive**: redaction is best-effort and cannot guarantee that every secret is caught. When you open a public Issue, prefer pasting only the minimal redacted snippet you actually need and remove anything you are unsure about. A packaged, pre-sanitized one-click diagnostic export is planned but not shipped yet; until then, collect the relevant log window manually.
+
 ## Windows distribution policy
 
 The normal-user Windows Release asset is `CodexBridge-Windows.zip`. It intentionally contains **no prebuilt `.exe`**. `Start CodexBridge.cmd` prepares the user-local runtime and builds the small tray Launcher locally on the user's machine.

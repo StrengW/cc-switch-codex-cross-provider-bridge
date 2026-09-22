@@ -51,6 +51,34 @@ namespace CodexBridgeLauncherApp
         private bool baselineInitialized;
         private bool handling;
         private bool thirdPartyProxyUnavailable;
+        // Set only while the bounded Provider/auth repair restart is running, so the
+        // proxy supervisor stays quiet during the expected :15721 drop. Cleared in a
+        // finally. It never triggers a restart by itself.
+        private volatile bool ccSwitchRepairInProgress;
+        // One-shot latch: the route key for which a repair restart was already
+        // attempted within the current switch edge. Re-armed at the start of every
+        // genuine switch edge so returning to the SAME third-party provider is
+        // repaired again.
+        private string ccSwitchRepairDoneKey = "";
+        // Deferred reconciliation: when a switch edge's action is suppressed by the
+        // cooldown or an open flap circuit, the edge is already consumed
+        // (lastHandledKey advanced), so remember the route key and re-apply it once
+        // the route settles and the guard clears. Without this a rate-limited switch
+        // leaves Codex on a stale config and CC Switch unrepaired (login screen later).
+        private string pendingRouteReconcileKey = "";
+        private const string ReconcileSentinelKey = "__reconcile_pending__";
+        // Circuit breaker against a route-flap Codex restart storm. While CC Switch
+        // and the Bridge settle a handoff, route_kind can oscillate
+        // (official<->third-party); each oscillation edge would otherwise restart
+        // Codex, so restarts are rate limited and, after repeated flaps, paused
+        // until the route stays stable again.
+        private DateTime lastRouteRestartUtc = DateTime.MinValue;
+        private DateTime flapStableSinceUtc = DateTime.MinValue;
+        private int suppressedRouteRestartCount;
+        private bool routeFlapCircuitOpen;
+        private const double RouteRestartCooldownSeconds = 8.0;
+        private const int RouteFlapThreshold = 3;
+        private const double RouteFlapSettleSeconds = 15.0;
         private volatile bool exiting;
         private ToolStripMenuItem statusItem;
         private ToolStripMenuItem pauseItem;
@@ -92,7 +120,7 @@ namespace CodexBridgeLauncherApp
             tray.DoubleClick += delegate { OpenLogFolder(); };
 
             Log("Launcher " + LauncherVersion + " started. base=" + baseDir + "; cwd=" + Environment.CurrentDirectory);
-            Log("Policy: CC Switch is the upstream lifecycle owner. Third-party routes observe proxy :15721 and ask the user to open CC Switch when unavailable; Official routes may run with CC Switch closed. Exit CodexBridge is an explicit shutdown and keeps the lightweight watcher alive.");
+            Log("Policy: CC Switch is the upstream lifecycle owner. CodexBridge never revives CC Switch in the background when proxy :15721 drops or the user closes it, and never selects or launches it via system discovery, a remembered path, or a default install path. The single exception is the provable Provider/auth switch repair flow, which may restart the already-bound live instance once (bounded, loop-free). Official routes may run with CC Switch closed. Exit CodexBridge is an explicit shutdown and keeps the lightweight watcher alive.");
             Log("Tray initialized; startup background failures are isolated from the UI process.");
             bool watcherStartupEnabled = Program.IsWatcherStartupRegistered();
             Log("CC Switch watcher startup: " + (watcherStartupEnabled ? "enabled" : "not registered") + "; installed_app=" + installDir);
@@ -272,6 +300,37 @@ namespace CodexBridgeLauncherApp
             if (route.Key == lastHandledKey)
             {
                 pendingKey = "";
+                // The route is stable on this tick. If the flap circuit is open,
+                // re-arm it only after the route has stayed stable long enough, so a
+                // self-sustaining oscillation cannot resume restarting Codex.
+                if (routeFlapCircuitOpen)
+                {
+                    if (flapStableSinceUtc == DateTime.MinValue) flapStableSinceUtc = DateTime.UtcNow;
+                    else if ((DateTime.UtcNow - flapStableSinceUtc).TotalSeconds >= RouteFlapSettleSeconds)
+                    {
+                        routeFlapCircuitOpen = false;
+                        suppressedRouteRestartCount = 0;
+                        lastRouteRestartUtc = DateTime.UtcNow;
+                        flapStableSinceUtc = DateTime.MinValue;
+                        Log("Route flap circuit re-armed after the route stayed stable.");
+                    }
+                }
+                // Deferred reconciliation: a switch whose action was suppressed by the
+                // cooldown or an open circuit is still pending. Now that the route has
+                // settled here and the guard has cleared, re-handle it once as a fresh
+                // edge so the final provider ends repaired/restarted instead of stale
+                // (Codex on an old config, or CC Switch left unrepaired).
+                if (pendingRouteReconcileKey == route.Key && !routeFlapCircuitOpen && !handling)
+                {
+                    double sinceLastRestart = (DateTime.UtcNow - lastRouteRestartUtc).TotalSeconds;
+                    if (lastRouteRestartUtc == DateTime.MinValue || sinceLastRestart >= RouteRestartCooldownSeconds)
+                    {
+                        pendingRouteReconcileKey = "";
+                        // Force the settled route to be picked up again by the edge path.
+                        lastHandledKey = ReconcileSentinelKey;
+                        Log("Reconciling settled route after a suppressed switch: " + route.Key);
+                    }
+                }
                 // A third-party route depends on the CC Switch proxy at :15721.
                 // Observe availability without controlling the upstream process.
                 SuperviseThirdPartyProxy(route);
@@ -292,6 +351,7 @@ namespace CodexBridgeLauncherApp
             lastHandledKey = route.Key;
             SaveStateValue("last_handled_route", lastHandledKey);
             pendingKey = "";
+            flapStableSinceUtc = DateTime.MinValue;
             handling = true;
             UpdateStatusText(ui.F("Switching: {0}", FriendlyRoute(route)));
             Log("Provider switch detected: " + route.Key);
@@ -301,15 +361,117 @@ namespace CodexBridgeLauncherApp
                 try
                 {
                     if (exiting) return;
+                    // A genuine switch edge re-arms the one-shot repair latch, so
+                    // returning to the SAME third-party provider (e.g. DeepSeek ->
+                    // Official -> DeepSeek) is repaired again instead of falling
+                    // straight to the login screen. This runs BEFORE the flap-circuit
+                    // gate so the bookkeeping is never skipped while the circuit is open.
+                    ccSwitchRepairDoneKey = "";
+                    // Settle briefly on a third-party edge so CC Switch finishes moving
+                    // auth.json to its no-live-ChatGPT-credential state before we read it;
+                    // a just-left Official credential would otherwise mask the repair need.
+                    if (string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
+                        Thread.Sleep(800);
+                    if (exiting) return;
+                    // While the flap circuit is open, pause ALL route-triggered
+                    // disruption (the plain Codex restart and the CC Switch repair) so
+                    // a flapping route cannot keep restarting anything.
+                    if (routeFlapCircuitOpen)
+                    {
+                        // Defer to reconciliation: this edge is already consumed, so
+                        // remember it and re-apply once the route settles and re-arms.
+                        pendingRouteReconcileKey = route.Key;
+                        Log("WARNING route-switch handling paused: flap circuit is open (key=" + route.Key + ").");
+                        return;
+                    }
                     if (string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
                     {
-                        RestartCodex("third-party route " + route.Model);
+                        // Edge-triggered Provider/auth repair: EVERY genuine switch onto
+                        // a third-party route restarts the already-bound live CC Switch
+                        // instance ONCE (bounded, loop-free) so it re-materializes a
+                        // consistent credential, then reloads Codex. Third-party mode pins
+                        // requires_openai_auth=true while CC Switch moves auth.json off the
+                        // live ChatGPT credential, so reloading Codex without first
+                        // restarting CC Switch lands on the login screen. Gating this on a
+                        // point-in-time credential read raced with CC Switch's own write and
+                        // silently skipped the repair on a repeat switch to the SAME provider
+                        // (Official -> DeepSeek -> Official -> DeepSeek). The one-shot latch
+                        // still bounds it to once per edge and the flap circuit still bounds
+                        // rapid switching, so it never revives CC Switch on a proxy drop or
+                        // after the user closes it.
+                        if (ccSwitchRepairDoneKey != route.Key)
+                        {
+                            bool repaired = false;
+                            ccSwitchRepairInProgress = true;
+                            try
+                            {
+                                UpdateStatusText(ui.T("Repairing provider switch (restarting CC Switch once)..."));
+                                string boundPath;
+                                if (TryBindLiveCcSwitchExecutablePath(out boundPath))
+                                    repaired = RestartBoundCcSwitchInstanceOnce(boundPath);
+                                else
+                                    Log("WARNING CC Switch repair skipped: no live verified CC Switch instance to bind.");
+                                ccSwitchRepairDoneKey = route.Key;
+                            }
+                            finally
+                            {
+                                ccSwitchRepairInProgress = false;
+                            }
+
+                            if (repaired)
+                            {
+                                Log("Third-party switch repaired; restarting Codex against the restored credential.");
+                                // A successful bounded repair always reloads Codex and
+                                // re-arms the flap circuit breaker (repair is one-shot per key).
+                                suppressedRouteRestartCount = 0;
+                                routeFlapCircuitOpen = false;
+                                lastRouteRestartUtc = DateTime.UtcNow;
+                                pendingRouteReconcileKey = "";
+                                RestartCodex("third-party route " + route.Model + " after CC Switch repair");
+                            }
+                            else if (IsThirdPartyAuthRepairNeeded(route))
+                            {
+                                // CC Switch could not be restarted and the credential is
+                                // genuinely absent: reloading Codex now would land on the
+                                // login screen, so skip it, ask the user to reopen CC Switch,
+                                // and defer the edge for reconciliation.
+                                Balloon(ui.T("Provider switch repair"), ui.T("Repair failed: please reopen CC Switch, then switch the provider again."), ToolTipIcon.Warning);
+                                Log("WARNING third-party auth repair did not complete; skipping Codex restart to avoid the login screen.");
+                                pendingRouteReconcileKey = route.Key;
+                                return;
+                            }
+                            else
+                            {
+                                // CC Switch was not running to repair, but a live credential
+                                // is present, so reloading Codex is safe.
+                                if (!RestartCodexForRouteSwitch("third-party route " + route.Model, route.Key))
+                                {
+                                    pendingRouteReconcileKey = route.Key;
+                                    return;
+                                }
+                                pendingRouteReconcileKey = "";
+                            }
+                        }
+                        else
+                        {
+                            if (!RestartCodexForRouteSwitch("third-party route " + route.Model, route.Key))
+                            {
+                                pendingRouteReconcileKey = route.Key;
+                                return;
+                            }
+                            pendingRouteReconcileKey = "";
+                        }
                     }
                     else
                     {
                         Thread.Sleep(300);
                         if (exiting) return;
-                        RestartCodex("Official route / ChatGPT account reload");
+                        if (!RestartCodexForRouteSwitch("Official route / ChatGPT account reload", route.Key))
+                        {
+                            pendingRouteReconcileKey = route.Key;
+                            return;
+                        }
+                        pendingRouteReconcileKey = "";
                     }
                     Log("Switch handling complete. Bridge was not restarted; CC Switch remained under user control.");
                     Balloon(ui.T("Provider switch complete"), ui.F("{0} is ready. Bridge remained resident.", FriendlyRoute(route)), ToolTipIcon.Info);
@@ -367,6 +529,58 @@ namespace CodexBridgeLauncherApp
                 if (!baseUrl.Success) return false;
                 string value = baseUrl.Groups[1].Value.Trim().TrimEnd('/');
                 return string.Equals(value, "https://chatgpt.com/backend-api/codex", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // Read-only check for the provable Provider/auth repair condition:
+        // third-party route + active custom provider requires_openai_auth=true +
+        // auth.json has no live ChatGPT credential. Never writes auth.json; logs
+        // only structural booleans (token values are never read into a log).
+        private bool IsThirdPartyAuthRepairNeeded(RouteSnapshot route)
+        {
+            try
+            {
+                if (route == null || !string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                string configPath = Path.Combine(codexHome, "config.toml");
+                if (!File.Exists(configPath)) return false;
+                string text = File.ReadAllText(configPath);
+                Match provider = Regex.Match(text, "(?m)^\\s*model_provider\\s*=\\s*[\"']custom[\"']\\s*(?:#.*)?$");
+                if (!provider.Success) return false;
+                Match section = Regex.Match(text,
+                    "(?ms)^\\s*\\[model_providers\\.(?:custom|\"custom\")\\]\\s*$([\\s\\S]*?)(?=^\\s*\\[|\\z)");
+                if (!section.Success) return false;
+                Match requiresAuth = Regex.Match(section.Groups[1].Value,
+                    "(?m)^\\s*requires_openai_auth\\s*=\\s*true\\s*(?:#.*)?$");
+                if (!requiresAuth.Success) return false;
+
+                bool liveCred = HasLiveChatGptCredential();
+                Log("Third-party auth repair check: requires_openai_auth=true; live_chatgpt_cred=" + (liveCred ? "true" : "false"));
+                return !liveCred;
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING third-party auth repair check failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        // Read-only structural check of ~/.codex/auth.json for a live ChatGPT
+        // credential (a non-empty access_token or refresh_token). Never writes
+        // auth.json and never logs token values.
+        private bool HasLiveChatGptCredential()
+        {
+            try
+            {
+                string authPath = Path.Combine(codexHome, "auth.json");
+                if (!File.Exists(authPath)) return false;
+                string json = ReadTextFileSafe(authPath);
+                if (string.IsNullOrEmpty(json)) return false;
+                string access = JsonString(json, "access_token");
+                string refresh = JsonString(json, "refresh_token");
+                return !string.IsNullOrEmpty(access) || !string.IsNullOrEmpty(refresh);
             }
             catch { return false; }
         }
@@ -487,6 +701,9 @@ namespace CodexBridgeLauncherApp
         {
             if (route == null || !string.Equals(route.Kind, "third-party", StringComparison.OrdinalIgnoreCase))
                 return;
+            // Stay quiet during the bounded repair restart: the :15721 drop there is
+            // expected and must not be reported as unavailable or trigger anything.
+            if (ccSwitchRepairInProgress) return;
             bool available = TestTcpPort("127.0.0.1", 15721, 120);
             if (available)
             {
@@ -515,6 +732,11 @@ namespace CodexBridgeLauncherApp
             }
             Log("Restarting Codex: " + reason);
             List<Process> processes = FindCodexProcesses();
+            if (processes.Count == 0)
+            {
+                Log("Codex is not running; nothing to restart.");
+                return;
+            }
             bool hadGui = false;
             string guiExe = "";
             for (int i = 0; i < processes.Count; i++)
@@ -530,6 +752,23 @@ namespace CodexBridgeLauncherApp
                 }
                 catch { }
             }
+
+            // Codex with no GUI window is a headless backend hosted by an editor
+            // (VS Code/Cursor) or a terminal. Terminating it leaves the editor on a
+            // "click to restart" page, and because route switches repeat, CodexBridge
+            // would keep killing the respawning backend, making that page flicker
+            // between the restart, restarting and login states. During normal
+            // operation, never terminate an editor-hosted backend: let the editor own
+            // its lifecycle and ask the user to restart Codex so it reloads the new
+            // route/credential. (The Exit handoff still cycles the process, so that
+            // path is unchanged.)
+            if (!hadGui && !exiting)
+            {
+                Log("Codex is an editor-hosted backend (no GUI window); not terminating it. Please restart Codex to apply: " + reason);
+                Balloon(ui.T("Restart Codex to apply"), ui.T("Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route."), ToolTipIcon.Info);
+                return;
+            }
+
             if (!string.IsNullOrEmpty(guiExe)) SaveStateValue("codex_gui_exe", guiExe);
             for (int i = 0; i < processes.Count; i++) KillProcessTree(processes[i].Id);
             Thread.Sleep(700);
@@ -559,6 +798,42 @@ namespace CodexBridgeLauncherApp
                 }
             }
             Log("Codex backend terminated. VS Code/Cursor should recreate it on the next Codex interaction.");
+        }
+
+        // Restarts Codex for a route-switch edge, but rate limited: never more than
+        // once per RouteRestartCooldownSeconds. A genuine user switch is seconds to
+        // minutes apart; a flapping route (official<->third-party oscillation while a
+        // handoff settles) re-arrives inside the cooldown, so its restarts are
+        // suppressed. After RouteFlapThreshold suppressions the circuit opens and all
+        // route-triggered restarts pause until the route has been stable, which breaks
+        // the "stuck restarting Codex" loop. Returns false when the restart was skipped.
+        private bool RestartCodexForRouteSwitch(string reason, string routeKey)
+        {
+            if (routeFlapCircuitOpen)
+            {
+                Log("WARNING route-switch Codex restart skipped: flap circuit is open (key=" + routeKey + ").");
+                return false;
+            }
+            double sinceLast = (DateTime.UtcNow - lastRouteRestartUtc).TotalSeconds;
+            if (lastRouteRestartUtc != DateTime.MinValue && sinceLast < RouteRestartCooldownSeconds)
+            {
+                suppressedRouteRestartCount++;
+                Log("WARNING route-switch Codex restart suppressed to break a flap loop: key=" + routeKey +
+                    "; since_last_restart_s=" + sinceLast.ToString("0.0", CultureInfo.InvariantCulture) +
+                    "; suppressed_count=" + suppressedRouteRestartCount);
+                if (suppressedRouteRestartCount >= RouteFlapThreshold)
+                {
+                    routeFlapCircuitOpen = true;
+                    Log("ERROR route flap circuit opened after " + suppressedRouteRestartCount +
+                        " suppressed restarts; automatic Codex restarts are paused until the route stays stable.");
+                    Balloon(ui.T("Route flapping detected"), ui.T("The provider route kept flipping, so CodexBridge paused automatic Codex restarts to avoid a restart loop. Reopen CC Switch, then switch the provider once more; CodexBridge resumes automatically."), ToolTipIcon.Warning);
+                }
+                return false;
+            }
+            suppressedRouteRestartCount = 0;
+            lastRouteRestartUtc = DateTime.UtcNow;
+            RestartCodex(reason);
+            return true;
         }
 
         private void RestartCodexForExit()
@@ -1051,6 +1326,85 @@ namespace CodexBridgeLauncherApp
             else Log(name + " port :" + port + " is closed.");
         }
 
+        // Bind ONLY the currently-running, path-verified CC Switch instance. The
+        // bound path comes from the live process (SafeProcessPath, validated by
+        // IsCcSwitchExecutablePath, never a window title). It is held in memory for
+        // this single repair only: never discovered, never read from a persisted /
+        // remembered / default install path, and never written back to state.
+        private bool TryBindLiveCcSwitchExecutablePath(out string boundPath)
+        {
+            boundPath = "";
+            List<Process> processes = FindCcSwitchProcesses();
+            for (int i = 0; i < processes.Count; i++)
+            {
+                try
+                {
+                    if (processes[i].HasExited) continue;
+                    string path = SafeProcessPath(processes[i]);
+                    if (!string.IsNullOrEmpty(path) && IsCcSwitchExecutablePath(path))
+                    {
+                        boundPath = path;
+                        break;
+                    }
+                }
+                catch { }
+            }
+            for (int i = 0; i < processes.Count; i++) { try { processes[i].Dispose(); } catch { } }
+            return !string.IsNullOrEmpty(boundPath);
+        }
+
+        // The ONLY new CC Switch stop+start path. Restarts the already-bound live
+        // instance once, bounded and loop-free: graceful stop -> bounded force ->
+        // wait :15721 closed -> relaunch the SAME bound path -> wait :15721 up ->
+        // short settle for auth.json. Any failure/timeout returns false (no retry).
+        private bool RestartBoundCcSwitchInstanceOnce(string boundPath)
+        {
+            if (string.IsNullOrEmpty(boundPath) || !File.Exists(boundPath))
+            {
+                Log("WARNING CC Switch repair aborted: bound executable path is not usable.");
+                return false;
+            }
+
+            DateTime overallDeadline = DateTime.UtcNow.AddSeconds(25);
+            Log("CC Switch repair: stopping the bound instance (graceful then bounded force)...");
+            List<Process> processes = FindCcSwitchProcesses();
+            for (int i = 0; i < processes.Count; i++)
+            {
+                try { if (processes[i].MainWindowHandle != IntPtr.Zero) processes[i].CloseMainWindow(); } catch { }
+            }
+            DateTime gracefulDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < gracefulDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
+            if (AnyProcessesAlive(processes))
+            {
+                Log("WARNING CC Switch graceful stop timed out during repair; forcing remaining process trees.");
+                for (int i = 0; i < processes.Count; i++)
+                {
+                    try { if (!processes[i].HasExited) KillProcessTree(processes[i].Id); } catch { }
+                }
+            }
+            DateTime processDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < processDeadline && AnyProcessesAlive(processes)) Thread.Sleep(150);
+            for (int i = 0; i < processes.Count; i++) { try { processes[i].Dispose(); } catch { } }
+            WaitForPortClosed("CC Switch", 15721, 5000);
+
+            Log("CC Switch repair: relaunching the same bound instance...");
+            if (!StartDetached(boundPath, ""))
+            {
+                Log("ERROR CC Switch repair could not relaunch the bound instance.");
+                return false;
+            }
+
+            while (DateTime.UtcNow < overallDeadline && !TestTcpPort("127.0.0.1", 15721, 200)) Thread.Sleep(250);
+            if (!TestTcpPort("127.0.0.1", 15721, 200))
+            {
+                Log("WARNING CC Switch repair timed out waiting for proxy :15721 to come back.");
+                return false;
+            }
+            Thread.Sleep(1500);
+            Log("CC Switch repair completed: bound instance restarted and proxy :15721 is up.");
+            return true;
+        }
+
         private static bool IsTraditionalChineseUiCulture(string cultureName)
         {
             if (String.IsNullOrEmpty(cultureName)) return false;
@@ -1372,11 +1726,35 @@ namespace CodexBridgeLauncherApp
                 {
                     Directory.CreateDirectory(logDir);
                     File.AppendAllText(launcherLog,
-                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message + Environment.NewLine,
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + Sanitize(message) + Environment.NewLine,
                         new UTF8Encoding(false));
                 }
             }
             catch { }
+        }
+
+        // Unified log redaction. Every persisted launcher.log line flows through
+        // Log(), including captured Bridge-manager stdout/stderr and exception
+        // details, so sanitizing at this single chokepoint covers them all. The
+        // diagnostics we intentionally keep (timestamp, route, provider/model,
+        // HTTP status, retry reason, ports, counts, fingerprints) never match
+        // these credential / personal-path patterns.
+        private static string Sanitize(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message;
+            string text = message;
+            text = Regex.Replace(text, @"(?i)\b(proxy-authorization|authorization)\s*:\s*[^\r\n]+", "$1: [REDACTED]");
+            text = Regex.Replace(text, @"(?i)\b(set-cookie|cookie)\s*:\s*[^\r\n]+", "$1: [REDACTED]");
+            text = Regex.Replace(text, @"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}", "$1 [REDACTED]");
+            text = Regex.Replace(text, @"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|id[_-]?token|secret|password|passwd)""?(\s*[:=]\s*""?)[^\s"",;}\]]+", "$1$2[REDACTED]");
+            text = Regex.Replace(text, @"\bsk-[A-Za-z0-9_-]{6,}", "[REDACTED_KEY]");
+            text = Regex.Replace(text, @"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}", "[REDACTED_JWT]");
+            text = Regex.Replace(text, @"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/@:]+:[^\s/@]+@", "$1[REDACTED]@");
+            text = Regex.Replace(text, @"(?i)([?&](?:token|access_token|api_key|apikey|key|code|secret|signature|sig|password)=)[^&#\s]+", "$1[REDACTED]");
+            text = Regex.Replace(text, @"/Users/[^/\s""']{1,64}/", "/Users/<user>/");
+            text = Regex.Replace(text, @"([A-Za-z]:)\\Users\\[^\\\s""']{1,64}\\", "$1\\Users\\<user>\\");
+            text = Regex.Replace(text, @"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b", "[REDACTED_EMAIL]");
+            return text;
         }
 
         private string ReadTextFileSafe(string path)

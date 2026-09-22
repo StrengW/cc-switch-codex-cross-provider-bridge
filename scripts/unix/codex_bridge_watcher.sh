@@ -11,7 +11,13 @@ POLL_SECONDS="${CPB_WATCH_POLL_SECONDS:-0.8}"
 
 mkdir -p "$STATE_ROOT"
 
-log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
+log() {
+  # Local home paths are personal data; mask $HOME so a shared watcher log
+  # never carries the account name (e.g. the portable-root path logged below).
+  local msg="$*"
+  msg="${msg//"$HOME"/~}"
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg" >>"$LOG"
+}
 
 is_pid_alive() {
   [[ "${1:-}" =~ ^[0-9]+$ ]] && kill -0 "$1" 2>/dev/null

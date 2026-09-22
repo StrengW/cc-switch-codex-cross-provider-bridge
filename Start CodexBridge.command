@@ -152,12 +152,54 @@ fi
 
 # Opening CodexBridge.app below is an explicit user action; the watcher itself
 # never starts CC Switch and login continues to start only the watcher agent.
-/usr/bin/osascript -e 'display notification "Codex Bridge is ready and will stay available even when CC Switch is closed." with title "Codex Bridge"' >/dev/null 2>&1 || true
-if [[ -x "$LAUNCHER_APP/Contents/MacOS/CodexBridge" ]]; then
-  /usr/bin/open "$LAUNCHER_APP" >/dev/null 2>&1 || echo "[CodexBridge] Could not open menu bar app; see $STATE_ROOT/launcher.log" >&2
+APP_BIN="$LAUNCHER_APP/Contents/MacOS/CodexBridge"
+
+launcher_running() {
+  /usr/bin/pgrep -f "$APP_BIN" >/dev/null 2>&1
+}
+
+if [[ ! -x "$APP_BIN" ]]; then
+  # No menu bar app could be installed (no bundled .app and no swiftc). The
+  # backend watcher still runs headless, so be honest that there is no UI here.
+  echo "[CodexBridge] Runtime and watcher installed; the menu bar app is unavailable on this machine."
+  echo "Runtime: $APP_ROOT"
+  echo "Logs: $STATE_ROOT"
+  echo "You can close this Terminal window."
+  sleep 2
+  exit 0
 fi
-echo "[CodexBridge] Ready."
-echo "Runtime: $APP_ROOT"
-echo "Logs: $STATE_ROOT"
-echo "You can close this Terminal window."
+
+/usr/bin/open "$LAUNCHER_APP" >/dev/null 2>&1 || true
+# `open` returns 0 even when Gatekeeper later refuses the unsigned, quarantined
+# app, so success must be proven by the running menu bar process, never assumed.
+launcher_started=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  if launcher_running; then launcher_started=1; break; fi
+  sleep 0.5
+done
+
+if [[ "$launcher_started" -eq 1 ]]; then
+  /usr/bin/osascript -e 'display notification "Codex Bridge is ready and will stay available even when CC Switch is closed." with title "Codex Bridge"' >/dev/null 2>&1 || true
+  echo "[CodexBridge] Ready."
+  echo "Menu bar launcher: running"
+  if /usr/bin/nc -z 127.0.0.1 15722 >/dev/null 2>&1; then
+    echo "Bridge: running"
+  else
+    echo "Bridge: starting (the menu bar app ensures it on launch)"
+  fi
+  echo "Runtime: $APP_ROOT"
+  echo "Logs: $STATE_ROOT"
+  echo "You can close this Terminal window."
+else
+  # Never report Ready when the menu bar process did not actually come up.
+  echo "[CodexBridge] Launcher failed to start." >&2
+  if /usr/bin/xattr -p com.apple.quarantine "$LAUNCHER_APP" >/dev/null 2>&1; then
+    echo "[CodexBridge] CodexBridge.app was blocked by macOS Gatekeeper." >&2
+  fi
+  echo "[CodexBridge] The runtime was installed, but the menu bar launcher did not start." >&2
+  # Give a normal-user action instead of expecting them to know xattr/Gatekeeper.
+  /usr/bin/open "$APP_ROOT" >/dev/null 2>&1 || true
+  /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically (macOS Gatekeeper may have blocked it). In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+  echo "Logs: $STATE_ROOT" >&2
+fi
 sleep 2

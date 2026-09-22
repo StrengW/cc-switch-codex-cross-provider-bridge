@@ -234,6 +234,42 @@ from urllib.parse import unquote, urlsplit
 from urllib.request import getproxies, proxy_bypass
 
 
+# Unified diagnostic-log redaction. Dynamic bridge log lines (exception
+# messages, upstream URLs, the HTTP request log line) are written through
+# _log()/_sanitize_log_text() so credentials, tokens, personal paths, and
+# emails can never reach bridge-stdout.log / bridge-stderr.log. Diagnostics we
+# keep on purpose (timestamp, route, provider/model, HTTP status, retry reason,
+# ports, counts, fingerprints) do not match these credential/personal-path
+# patterns.
+_LOG_REDACTION_PATTERNS = (
+    (re.compile(r"(?i)\b(proxy-authorization|authorization)\s*:\s*[^\r\n]+"), r"\1: [REDACTED]"),
+    (re.compile(r"(?i)\b(set-cookie|cookie)\s*:\s*[^\r\n]+"), r"\1: [REDACTED]"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|id[_-]?token|secret|password|passwd)(\s*[:=]\s*)[^\s,;}\]]+"), r"\1\2[REDACTED]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{6,}"), "[REDACTED_KEY]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}"), "[REDACTED_JWT]"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/@:]+:[^\s/@]+@"), r"\1[REDACTED]@"),
+    (re.compile(r"(?i)([?&](?:token|access_token|api_key|apikey|key|code|secret|signature|sig|password)=)[^&#\s]+"), r"\1[REDACTED]"),
+    (re.compile(r"/Users/[^/\s]+"), "/Users/<user>"),
+    (re.compile(r"([A-Za-z]:\\Users\\)[^\\\s]+"), r"\1<user>"),
+    (re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "[REDACTED_EMAIL]"),
+)
+
+
+def _sanitize_log_text(text: str) -> str:
+    """Redact credentials, tokens, personal paths, and emails from a log line."""
+    if not text:
+        return text
+    for pattern, replacement in _LOG_REDACTION_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _log(message: str, *, error: bool = False) -> None:
+    """Print one sanitized diagnostic line to stdout (or stderr when error)."""
+    print(_sanitize_log_text(message), file=sys.stderr if error else sys.stdout, flush=True)
+
+
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -3869,12 +3905,11 @@ class CatalogConfigGuard:
                 scoped_catalog, route_official=False
             )
             if changed_route or self.last_merge_added or self.last_merge_replaced:
-                print(
+                _log(
                     "Provider-scoped catalog guard: third-party route selected; Codex picker "
                     f"contains current-provider models only; learned_added={self.last_merge_added}, "
                     f"learned_updated={self.last_merge_replaced}, removed_comp_hash={removed}, "
-                    f"route_model={selected_model or '-'}.",
-                    flush=True,
+                    f"route_model={selected_model or '-'}."
                 )
             return
 
@@ -3927,10 +3962,9 @@ class CatalogConfigGuard:
             except Exception as exc:
                 message = str(exc)
                 if message != self.last_error:
-                    print(
+                    _log(
                         f"Warning: CompHash resident catalog guard could not reconcile config: {message}",
-                        file=sys.stderr,
-                        flush=True,
+                        error=True,
                     )
                     self.last_error = message
 
@@ -4240,7 +4274,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def log_message(self, fmt: str, *args: object) -> None:
-        sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+        sys.stderr.write(_sanitize_log_text("[%s] %s\n" % (self.log_date_time_string(), fmt % args)))
 
     def _upstream_path(self) -> str:
         upstream = self.server.upstream  # type: ignore[attr-defined]
@@ -6239,10 +6273,9 @@ def main() -> int:
             catalog_guard.start()
             server.catalog_guard = catalog_guard  # type: ignore[attr-defined]
         except Exception as exc:
-            print(
+            _log(
                 f"Warning: provider-scoped model-catalog guard could not start: {exc}",
-                file=sys.stderr,
-                flush=True,
+                error=True,
             )
             catalog_guard = None
             server.catalog_guard = None  # type: ignore[attr-defined]
@@ -6258,8 +6291,8 @@ def main() -> int:
         signal.signal(signal.SIGTERM, stop)
 
     print(f"Codex bridge listening on http://{listen_host}:{listen_port_text}")
-    print(f"HTTP /responses upstream: {args.upstream}")
-    print(f"Direct Official Responses WebSocket: {args.responses_ws_upstream}")
+    _log(f"HTTP /responses upstream: {args.upstream}")
+    _log(f"Direct Official Responses WebSocket: {args.responses_ws_upstream}")
     print("Realtime voice should bypass this bridge: call creation uses ChatGPT backend; sideband uses OpenAI realtime.")
     print("Auth-aware restart continuity enabled: v2.15.1 keeps Official resident-WS restart continuity and correctness-first third-party shadow guards while Windows/macOS use repository-ZIP quick-start bootstraps. Cross-provider tool-bearing histories, unverified completions, and instruction drift fall back to complete portable replay instead of reusing stale provider cursors.")
     print("Provider routing persistence enabled: CC Switch selects the upstream provider, while the concrete model selected in Codex is preserved whenever it belongs to that provider. Stale models are rebound once to the route default.")
@@ -6284,7 +6317,7 @@ def main() -> int:
     else:
         print("Prompt-cache optimization disabled: using native implicit prompt caching only.")
     if server.model_override:  # type: ignore[attr-defined]
-        print(f"Rewriting request model to {server.model_override}")  # type: ignore[attr-defined]
+        _log(f"Rewriting request model to {server.model_override}")  # type: ignore[attr-defined]
         if server.preserve_comp_hash:  # type: ignore[attr-defined]
             print("CompHash switch guard disabled: upstream /models comp_hash is preserved.")
         else:

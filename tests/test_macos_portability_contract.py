@@ -166,6 +166,101 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("open", start)
         self.assertIn("codex_bridge_uninstall.sh", start)
 
+    def test_macos_bootstrap_never_silently_bypasses_gatekeeper(self):
+        # Never silently strip quarantine, disable Gatekeeper, or escalate. A
+        # read-only `xattr -p com.apple.quarantine` detection is still allowed.
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        watcher = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")
+        for text in (start, watcher):
+            self.assertNotIn("xattr -dr com.apple.quarantine", text)
+            self.assertNotIn("clear_quarantine", text)
+            self.assertNotIn("spctl --master-disable", text)
+            self.assertNotIn("sudo", text)
+
+    def test_macos_bootstrap_proves_real_start_before_reporting_ready(self):
+        # `open` returns 0 even when Gatekeeper later refuses the app, so Ready
+        # must be gated on an actual running menu bar process, never assumed.
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertIn("launcher_running", start)
+        self.assertIn("pgrep", start)
+        self.assertIn('echo "[CodexBridge] Ready."', start)
+        self.assertLess(start.index("pgrep"), start.index('echo "[CodexBridge] Ready."'))
+        # Honest failure path plus a normal-user Gatekeeper action (right-click -> Open).
+        self.assertIn("Launcher failed to start", start)
+        self.assertIn("right-click CodexBridge.app, choose Open", start)
+
+    def test_macos_menu_bar_reports_third_party_blocked_when_proxy_missing(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        self.assertIn("thirdPartyBlocked", source)
+        self.assertIn("bridgePortOpen(15721)", source)
+        self.assertIn("Third-party unavailable (open CC Switch)", source)
+        self.assertIn("127.0.0.1:15721", source)
+        # On a proxy drop / user close it only asks the user to open CC Switch; it
+        # never revives it there (the bounded repair is a separate, narrower flow).
+        self.assertIn("will not revive it", source)
+
+    def test_macos_launcher_has_bounded_bound_ccswitch_repair_parity(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        # Read-only detection of the provable condition; never writes auth.json.
+        self.assertIn("func isThirdPartyAuthRepairNeeded()", source)
+        self.assertIn("requires_openai_auth", source)
+        self.assertIn("hasLiveChatGptCredential", source)
+        self.assertIn("contents(atPath: authPath)", source)
+        self.assertNotIn("removeItem(atPath: authPath)", source)
+        self.assertNotIn(".write(toFile: authPath", source)
+        # Binding uses ONLY the live running instance (no discovery / default path).
+        self.assertIn("func boundCcSwitchAppPath()", source)
+        self.assertIn("NSWorkspace.shared.runningApplications", source)
+        # Bounded one-shot restart of the bound instance. The repair no longer reloads
+        # Codex itself (that would kill an editor-hosted backend); restartCodex() now
+        # survives only as the manual tray menu action.
+        self.assertIn("func restartBoundCcSwitchInstanceOnce(", source)
+        self.assertIn("/usr/bin/open\", [boundPath]", source)
+        self.assertIn("repairDoneKey", source)
+        self.assertIn("repairInProgress", source)
+        self.assertIn("checkProviderSwitchRepair", source)
+        self.assertIn("restartCodex()", source)
+        # Never discovers/launches CC Switch by name or a remembered/default path.
+        self.assertNotIn("open -a", source)
+        self.assertNotIn("LaunchServices", source)
+        self.assertNotIn("rememberedCcSwitch", source)
+        self.assertNotIn("discoverCcSwitch", source)
+        # The repair lives in Swift; the manager/watcher stay free of CC Switch restarts.
+        manager = (ROOT / "scripts" / "unix" / "codex_bridge_manager.sh").read_text(encoding="utf-8-sig")
+        self.assertNotIn("restart-cc-switch)", manager)
+        self.assertNotIn("restart_cc_switch", manager)
+
+    def test_macos_launcher_has_repair_flap_circuit_breaker_parity(self):
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        # Storm-guard state + tunables mirror the Windows launcher.
+        for token in ("repairCircuitOpen", "repairCooldownSeconds", "repairFlapThreshold",
+                      "repairFlapSettleSeconds", "suppressedRepairCount", "lastRepairRestartAt",
+                      "observedRouteKey", "routeStableSince"):
+            self.assertIn(token, source)
+        # Leaving a third-party route re-arms the one-shot latch (repeat-switch fix).
+        self.assertIn("repairDoneKey = nil", source)
+        # A genuine third-party switch edge ALSO re-arms the latch (after the same-key
+        # guard), so returning to the SAME provider (DeepSeek -> Official -> DeepSeek)
+        # is repaired again instead of being blocked by a stale latch.
+        guard_idx = source.find("if key == lastRouteKey && !isReconcile { return }")
+        rearm_idx = source.find("repairDoneKey = nil", guard_idx)
+        self.assertNotEqual(guard_idx, -1)
+        self.assertGreater(rearm_idx, guard_idx)
+        # Deferred reconciliation: a repair suppressed by the cooldown/circuit is
+        # remembered and re-attempted once the route settles, so a rate-limited
+        # switch is never silently dropped (parity with the Windows launcher).
+        self.assertIn("private var pendingRepairReconcileKey: String?", source)
+        self.assertIn("let isReconcile = (pendingRepairReconcileKey == key)", source)
+        self.assertIn("pendingRepairReconcileKey = key", source)
+        # A deferred reconcile retry must not count toward the flap threshold.
+        self.assertIn("if !isReconcile {", source)
+        # Edge-triggered repair parity: the repair restarts CC Switch once and then
+        # asks the user to reload Codex. It never terminates an editor-hosted Codex
+        # backend, so a repeat switch cannot make the "click to restart" page flicker.
+        self.assertNotIn("codexOk", source)
+        self.assertIn("Please restart Codex to reload the restored credential.", source)
+        self.assertIn("Provider switch repair failed: please reopen CC Switch", source)
+
 
 if __name__ == "__main__":
     unittest.main()

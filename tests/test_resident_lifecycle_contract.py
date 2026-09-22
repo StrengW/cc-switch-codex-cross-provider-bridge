@@ -61,11 +61,88 @@ def test_third_party_supervisor_only_observes_proxy_transition():
     assert "KillProcessTree" not in body
 
 
-def test_provider_switch_never_restarts_ccswitch():
+def test_provider_switch_repair_restart_is_bounded_bound_and_one_shot():
     text = LAUNCHER.read_text(encoding="utf-8-sig")
     poll = _method_body(text, "private void PollTimerTick", "private string FriendlyRoute")
     assert "RestartCodex(\"third-party route " in poll
-    assert "RestartCcSwitch" not in poll
+    # Edge-triggered repair: EVERY genuine third-party switch edge restarts the bound
+    # CC Switch once, gated ONLY by the one-shot per-key latch (if ccSwitchRepairDoneKey
+    # != route.Key). It is never gated by a point-in-time credential read, which raced
+    # with CC Switch's own auth.json write and silently skipped the repair on a repeat
+    # switch to the SAME provider (Official -> DeepSeek -> Official -> DeepSeek).
+    # IsThirdPartyAuthRepairNeeded now survives only as the fallback that decides
+    # whether reloading Codex is safe when CC Switch could not be repaired.
+    assert "if (ccSwitchRepairDoneKey != route.Key)" in poll
+    assert "IsThirdPartyAuthRepairNeeded(route) && ccSwitchRepairDoneKey" not in poll
+    assert "else if (IsThirdPartyAuthRepairNeeded(route))" in poll
+    assert "ccSwitchRepairDoneKey != route.Key" in poll
+    assert "ccSwitchRepairDoneKey = route.Key" in poll
+    assert "ccSwitchRepairInProgress = true" in poll
+    assert "ccSwitchRepairInProgress = false" in poll
+    assert "TryBindLiveCcSwitchExecutablePath(out boundPath)" in poll
+    assert "RestartBoundCcSwitchInstanceOnce(boundPath)" in poll
+    # On failure the Codex restart is skipped so the user is not pushed to login.
+    assert "skipping Codex restart to avoid the login screen" in poll
+    # Discovery / remembered-path / auto-revive helpers must never appear here.
+    for token in ("DiscoverCcSwitchExe", "StartCcSwitchFromRememberedTarget", "EnsureCcSwitchProxyRunning", "RestartCcSwitch"):
+        assert token not in poll
+
+
+def test_route_switch_restart_has_flap_circuit_breaker():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    # Storm-guard state + tunables.
+    assert "private bool routeFlapCircuitOpen;" in text
+    assert "RouteRestartCooldownSeconds" in text
+    assert "RouteFlapThreshold" in text
+    assert "RouteFlapSettleSeconds" in text
+    # A dedicated rate-limited helper restarts Codex for BOTH switch branches.
+    assert "private bool RestartCodexForRouteSwitch(string reason, string routeKey)" in text
+    poll = _method_body(text, "private void PollTimerTick", "private string FriendlyRoute")
+    assert 'RestartCodexForRouteSwitch("Official route / ChatGPT account reload", route.Key)' in poll
+    assert 'RestartCodexForRouteSwitch("third-party route " + route.Model, route.Key)' in poll
+    # While the circuit is open the whole switch handler (repair included) is paused.
+    assert "route-switch handling paused: flap circuit is open" in poll
+    # Every genuine switch edge re-arms the one-shot repair latch (repeat-switch fix),
+    # and the re-arm MUST precede the flap-circuit gate so a re-switch to the SAME
+    # third-party provider is never blocked by a stale latch while the circuit is open.
+    assert 'ccSwitchRepairDoneKey = "";' in poll
+    assert poll.find('ccSwitchRepairDoneKey = "";') < poll.find(
+        "route-switch handling paused: flap circuit is open"
+    )
+    # A third-party edge settles before reading auth.json to avoid a credential race
+    # (a just-left Official credential would otherwise mask the repair need).
+    assert "Thread.Sleep(800)" in poll
+    # Deferred reconciliation: a switch suppressed by the cooldown/circuit is
+    # remembered and re-applied once the route settles, so a rate-limited switch
+    # (e.g. Official with no Codex restart, then several third-parties) is never
+    # silently dropped leaving Codex stale / CC Switch unrepaired.
+    assert "private string pendingRouteReconcileKey" in text
+    assert "Reconciling settled route after a suppressed switch" in poll
+    assert "lastHandledKey = ReconcileSentinelKey;" in poll
+    assert "pendingRouteReconcileKey = route.Key;" in poll
+    # The circuit re-arms only after the route stays stable.
+    assert "Route flap circuit re-armed after the route stayed stable." in text
+    helper = _method_body(text, "private bool RestartCodexForRouteSwitch", "private void RestartCodexForExit")
+    assert "suppressedRouteRestartCount++" in helper
+    assert "routeFlapCircuitOpen = true" in helper
+    assert "RestartCodex(reason);" in helper
+
+
+def test_restart_codex_never_terminates_an_editor_hosted_backend():
+    text = LAUNCHER.read_text(encoding="utf-8-sig")
+    body = _method_body(text, "private void RestartCodex(string reason", "private bool RestartCodexForRouteSwitch")
+    # A headless Codex (no GUI window) is an editor-hosted backend (VS Code/Cursor).
+    # During normal operation it is never terminated: killing it leaves the editor on a
+    # "click to restart" page and, because route switches repeat, CodexBridge would keep
+    # killing the respawning backend and make that page flicker between the restart,
+    # restarting and login states. Instead the user is asked to restart Codex so the
+    # editor owns its own lifecycle.
+    assert "MainWindowHandle" in body
+    assert "if (!hadGui && !exiting)" in body
+    assert "editor-hosted backend" in body
+    assert 'ui.T("Restart Codex to apply")' in body
+    # The GUI path still cycles the process, and the Exit handoff (exiting) is unchanged.
+    assert "KillProcessTree" in body
 
 
 def test_exit_worker_has_bounded_independent_stop_path_and_continues_after_warnings():
@@ -111,7 +188,12 @@ def test_watcher_baselines_existing_ccswitch_without_treating_login_as_new_edge(
 
 
 def test_conversation_bridge_core_remains_unchanged():
-    assert _normalized_sha256(BRIDGE) == "2f43640afbfa83a687201ed53a9d812d3235e9446c72b9e18d75418ba5d94fab"
+    # Re-baselined for the sanctioned diagnostic-log sanitizer layer only
+    # (_sanitize_log_text/_log plus wrapped print sites). The conversation
+    # continuation core (resp_/msg_ mapping, provider continuation, resident-WS,
+    # portable replay, compatibility firewall, strict tool repair, CompHash) is
+    # unchanged.
+    assert _normalized_sha256(BRIDGE) == "5d418498317fca43e6f8da9cbcef12f6ca4cbea737e98829845943effadfc351"
 
 
 def test_manager_core_remains_unchanged():

@@ -79,6 +79,13 @@ namespace CodexBridgeLauncherApp
                 case "Could not install Codex Bridge into %LOCALAPPDATA%\\CodexProviderBridge\\app.\r\n\r\n{0}": return Z("无法将 CodexBridge 安装到 %LOCALAPPDATA%\\CodexProviderBridge\\app。\r\n\r\n{0}", "無法將 CodexBridge 安裝到 %LOCALAPPDATA%\\CodexProviderBridge\\app。\r\n\r\n{0}");
                 case "Codex Bridge Launcher is already running in the system tray.": return Z("CodexBridge 启动器已在系统托盘中运行。", "CodexBridge 啟動器已在系統匣中執行。");
                 case "Codex Bridge Launcher crashed. See %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log": return Z("CodexBridge 启动器崩溃，请查看 %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log", "CodexBridge 啟動器當機，請查看 %LOCALAPPDATA%\\CodexProviderBridge\\launcher-crash.log");
+                case "Repairing provider switch (restarting CC Switch once)...": return Z("正在修复 Provider 切换（重启 CC Switch 一次）...", "正在修復 Provider 切換（重新啟動 CC Switch 一次）...");
+                case "Provider switch repair": return Z("Provider 切换修复", "Provider 切換修復");
+                case "Repair failed: please reopen CC Switch, then switch the provider again.": return Z("修复失败：请重新打开 CC Switch，然后再次切换 Provider。", "修復失敗：請重新開啟 CC Switch，然後再次切換 Provider。");
+                case "Route flapping detected": return Z("检测到路由抖动", "偵測到路由抖動");
+                case "The provider route kept flipping, so CodexBridge paused automatic Codex restarts to avoid a restart loop. Reopen CC Switch, then switch the provider once more; CodexBridge resumes automatically.": return Z("Provider 路由反复抖动，CodexBridge 已暂停自动重启 Codex 以避免重启循环。请重新打开 CC Switch，然后再切换一次 Provider；CodexBridge 会自动恢复。", "Provider 路由反覆抖動，CodexBridge 已暫停自動重新啟動 Codex 以避免重新啟動循環。請重新開啟 CC Switch，然後再切換一次 Provider；CodexBridge 會自動恢復。");
+                case "Restart Codex to apply": return Z("请重启 Codex 以生效", "請重新啟動 Codex 以生效");
+                case "Provider switched. Please restart Codex in your editor (VS Code/Cursor) to apply the new route.": return Z("Provider 已切换。请在你的编辑器（VS Code/Cursor）中重启 Codex 以应用新路由。", "Provider 已切換。請在你的編輯器（VS Code/Cursor）中重新啟動 Codex 以套用新路由。");
                 default: return english;
             }
         }
