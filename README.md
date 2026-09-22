@@ -19,6 +19,8 @@
 
 > CodexBridge 是 **CC Switch 的非官方 companion**，不是 OpenAI 或 CC Switch 的官方组件。
 
+> **macOS 用户请先看这里**：当前 Release 未做 Apple 签名/公证（文件名带 `-unsigned`），首次启动会被 Gatekeeper 拦截。**macOS 15 Sequoia 起，“右键 → 打开”已不再放行未签名程序**，需前往 **系统设置 → 隐私与安全性**，点底部的 **仍要打开**；macOS 14 及更早仍可“右键 → 打开”。完整步骤见下方 macOS 小节。
+
 ## 30 秒理解
 
 如果你正在用 **Codex + CC Switch**，可能遇到过：切 Provider 后旧对话还能看到，但继续发送会报错；tool / reasoning 历史在另一个 Provider 上不兼容；切回 Official 还残留三方状态。
@@ -50,7 +52,7 @@ OpenAI Official
 > - **CodexBridge 不会因为代理掉线或你主动关闭而后台复活 CC Switch，也不会经系统发现 / 历史路径 / 默认安装路径擅自选择并启动它。** 如果不小心关掉了 CC Switch，重新打开它即可恢复，无需重启 CodexBridge 或 Codex。唯一例外：在可证明需要的 Provider/auth 切换修复流程中（Windows 与 macOS 行为一致），CodexBridge 会对当前已确认绑定的同一个 CC Switch 实例执行一次受控、有限、无循环的重启来修复登录态。
 > - 只有 **OpenAI Official** 路由不依赖 CC Switch，可以在 CC Switch 关闭时继续使用。
 >
-> 一句话记忆：**CC Switch 决定“切到哪个 Provider”，CodexBridge 决定“切完还能不能接着聊”；用第三方时两者缺一不可。**
+> 简言之：CC Switch 负责选用哪个 Provider，CodexBridge 负责切换之后让同一条会话继续可用。使用第三方 Provider 时，二者都需要保持运行。
 
 ### 第一次使用（正确顺序）
 
@@ -113,7 +115,7 @@ Start CodexBridge.command
 
 macOS 当前为 **Beta**。Release 暂未做 Apple Developer 签名/公证，因此文件名带 `-unsigned`。
 
-首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。脚本**不会**偷偷清除隔离标记或改动系统安全策略：它会打开菜单栏应用并**校验进程是否真的起来**，只有确认成功才显示 `[CodexBridge] Ready.`；万一 `CodexBridge.app` 被 Gatekeeper 拦下，脚本会明确报错、自动打开所在文件夹并弹窗指引你对它 **右键 → 打开** 那一次（放行后即可正常使用，无需手动敲 `xattr`）。完整步骤见下方 macOS 小节。
+首次启动如果被 Gatekeeper 提醒，在 Finder 中对 `Start CodexBridge.command` **右键 → 打开** 一次即可；不要关闭 Gatekeeper。脚本**不会**偷偷清除隔离标记或改动系统安全策略：它会打开菜单栏应用并**校验进程是否真的起来**，只有确认成功才显示 `[CodexBridge] Ready.`；万一 `CodexBridge.app` 被 Gatekeeper 拦下，脚本会明确报错、自动打开所在文件夹并弹窗指引你对它 **右键 → 打开** 那一次（放行后即可正常使用，无需手动敲 `xattr`；macOS 15 Sequoia 上“右键 → 打开”无效，改用 系统设置 → 隐私与安全性 → 仍要打开）。完整步骤见下方 macOS 小节。
 
 启动完成后，CodexBridge 会以原生 Menu Bar 应用显示在 macOS 菜单栏，不占用 Dock 图标。登录时只运行轻量 watcher；当用户打开 CC Switch，watcher 才启动 CodexBridge 菜单栏应用和 Bridge。CodexBridge 不会因代理掉线或你主动关闭而后台复活 CC Switch，也不会经发现/历史/默认路径擅自启动它；唯一例外是 Provider/auth 切换修复流程：当可证明需要时，它会对当前已绑定的同一个 CC Switch 实例做一次受控重启来修复登录态（与 Windows 一致）。普通关闭 UI 不会停止后台 Bridge，只有确认 `退出 CodexBridge...` 才会停止完整 Launcher、Bridge 和 CC Switch，同时保留 watcher。
 
@@ -134,7 +136,7 @@ macOS 目前是 **Beta / CI 验证**，Release 为 `-unsigned`（暂未做 Apple
 
 1. 下载与芯片对应的包并解压：Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`；Intel → `CodexBridge-macOS-Intel-unsigned.zip`。
 2. 双击 **`Start CodexBridge.command`**；首次若被 Gatekeeper 拦，在 Finder 中对它 **右键 → 打开** 一次。
-3. 看终端：**只有出现 `[CodexBridge] Ready.` 且 `Menu bar launcher: running` 才算真的启动成功**。若显示 `Launcher failed to start` 并提示被 Gatekeeper 拦截，脚本会自动打开文件夹并弹窗指引：对里面的 `CodexBridge.app` **右键 → 打开 → 再点“打开”**（放行一次即可，不要移到废纸篓、不要关闭 Gatekeeper、也不用手动敲 `xattr`）。
+3. 看终端：**只有出现 `[CodexBridge] Ready.` 且 `Menu bar launcher: running` 才算真的启动成功**。若显示 `Launcher failed to start` 并提示被 Gatekeeper 拦截，脚本会自动打开文件夹并弹窗指引：对里面的 `CodexBridge.app` **右键 → 打开 → 再点“打开”**（放行一次即可，不要移到废纸篓、不要关闭 Gatekeeper、也不用手动敲 `xattr`；macOS 15 Sequoia 改为 系统设置 → 隐私与安全性 → 仍要打开）。
 4. 点菜单栏 **CodexBridge** 图标，确认 **状态 = 运行中**、**路由 = Official**。
 5. 打开你原来的 Codex 会话，直接继续发送。
 
@@ -149,7 +151,7 @@ macOS 目前是 **Beta / CI 验证**，Release 为 `-unsigned`（暂未做 Apple
 5. 回到原 Codex 会话继续发送。切换后**不需要你手动重启 CC Switch**，也不需要手动改 `config.toml`；若出现需要修复的登录态，CodexBridge 会自动对已绑定的 CC Switch 实例做一次受控重启并重载 Codex（与 Windows 一致）。
 
 > **会话迁移开关**：CodexBridge 自己实现跨 Provider 会话续接，**不依赖** CC Switch 的“会话迁移”开关；报障时请注明它的状态，但我们不会武断要求你必须开或必须关。
-> 长期方案是 Developer ID 签名 + 公证（CI 已预留该流程），届时不再有“已损坏 / 右键打开”这一步。
+> 若日后配置 Apple Developer ID 签名 + 公证（CI 已预留该流程），将不再有“已损坏 / 右键打开 / 仍要打开”这一步；当前版本不含签名。
 
 ## 日常使用（Windows）
 
