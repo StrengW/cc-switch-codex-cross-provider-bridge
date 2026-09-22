@@ -17,7 +17,7 @@ namespace CodexBridgeSetupApp
         private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValueName = "CodexBridgeLauncher";
         private const string UninstallRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBridge";
-        private const string ProductVersion = "0.1.8";
+        private const string ProductVersion = "0.2.0";
         private const string WatcherStopEventName = @"Local\CodexProviderBridgeCcSwitchWatcherStop";
         private const string SetupMutexName = @"Local\CodexBridgeSetup";
         private static string rootOverride = null;
