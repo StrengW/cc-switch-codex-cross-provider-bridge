@@ -199,7 +199,20 @@ else
   echo "[CodexBridge] The runtime was installed, but the menu bar launcher did not start." >&2
   # Give a normal-user action instead of expecting them to know xattr/Gatekeeper.
   /usr/bin/open "$APP_ROOT" >/dev/null 2>&1 || true
-  /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically (macOS Gatekeeper may have blocked it). In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+  # macOS 15 Sequoia removed the Right-click -> Open bypass for unsigned apps, so
+  # pick the guidance that matches the running system. Both dialogs are static
+  # single-quoted strings; the script never strips quarantine or disables Gatekeeper.
+  macos_major="$(/usr/bin/sw_vers -productVersion 2>/dev/null | cut -d. -f1 || true)"
+  case "$macos_major" in
+    ''|*[!0-9]*) macos_major=0 ;;
+  esac
+  if [[ "$macos_major" -ge 15 ]]; then
+    echo "[CodexBridge] macOS 15 Sequoia or later: open System Settings -> Privacy & Security, click 'Open Anyway' near the bottom, then reopen." >&2
+    /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically because it is unsigned and macOS Gatekeeper blocked it. On macOS 15 Sequoia the Right-click -> Open shortcut no longer works. Open System Settings, go to Privacy & Security, scroll to the bottom and click Open Anyway, then open CodexBridge again. Do not move it to the Trash and do not disable Gatekeeper." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+  else
+    echo "[CodexBridge] In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." >&2
+    /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically (macOS Gatekeeper may have blocked it). In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+  fi
   echo "Logs: $STATE_ROOT" >&2
 fi
 sleep 2

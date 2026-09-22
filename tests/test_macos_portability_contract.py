@@ -189,6 +189,20 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("Launcher failed to start", start)
         self.assertIn("right-click CodexBridge.app, choose Open", start)
 
+    def test_macos_bootstrap_gatekeeper_guidance_is_version_aware(self):
+        # macOS 15 Sequoia removed the Right-click -> Open bypass for unsigned apps,
+        # so the failure dialog must branch on the running system version: Sequoia+
+        # gets the Privacy & Security -> Open Anyway path, macOS 14 and earlier keep
+        # the right-click guidance. The branch must stay read-only (no bypass).
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertIn("sw_vers -productVersion", start)
+        self.assertIn('[[ "$macos_major" -ge 15 ]]', start)
+        self.assertIn("Privacy & Security", start)
+        self.assertIn("Open Anyway", start)
+        self.assertIn("right-click CodexBridge.app, choose Open", start)
+        self.assertNotIn("xattr -dr com.apple.quarantine", start)
+        self.assertNotIn("spctl --master-disable", start)
+
     def test_macos_menu_bar_reports_third_party_blocked_when_proxy_missing(self):
         source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
         self.assertIn("thirdPartyBlocked", source)

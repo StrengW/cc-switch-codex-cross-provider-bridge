@@ -4,6 +4,10 @@ CodexBridge follows semantic public release versions from the repository-root `V
 
 ## [Unreleased]
 
+### Fixed
+
+- Made the macOS Gatekeeper guidance version-aware in `Start CodexBridge.command`. macOS 15 Sequoia removed the Right-click -> Open bypass for unsigned apps, so when the menu bar app is blocked the startup script now detects the running macOS version and shows the matching steps: on Sequoia and later, System Settings -> Privacy & Security -> Open Anyway; on macOS 14 and earlier, the previous right-click -> Open guidance. The script still never strips the quarantine flag, disables Gatekeeper, or escalates.
+
 ## [0.1.8] - 2026-09-23
 
 ### Changed
