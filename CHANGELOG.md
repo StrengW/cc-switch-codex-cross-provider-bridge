@@ -4,6 +4,8 @@ CodexBridge follows semantic public release versions from the repository-root `V
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-23
+
 ### Changed
 
 - Narrowed the CC Switch lifecycle rule. CodexBridge still never revives CC Switch on a proxy drop or after the user closes it, and never selects or launches it via system discovery, a remembered path, or a default install path. The single exception: on a real provider-switch edge onto an active third-party route (Windows and macOS launchers), it performs one controlled, bounded, loop-free restart of the already-bound live CC Switch instance so it re-materializes a consistent credential. The bound executable path comes only from the running process (Windows: verified process path; macOS: the live CC Switch app from `NSWorkspace.runningApplications`, relaunched by explicit bundle path) and is never persisted. CodexBridge never writes `auth.json`.
