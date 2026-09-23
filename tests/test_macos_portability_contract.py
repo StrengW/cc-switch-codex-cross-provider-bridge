@@ -44,6 +44,17 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertNotIn('restart-cc-switch)', text)
         self.assertIn('Library/Application Support/CodexProviderBridge', text)
 
+    def test_macos_manager_resolves_private_state_runtime_fallback(self):
+        # The menu bar app must still start the Bridge when the shim is lost or
+        # still points into a since-deleted extracted folder: the manager falls
+        # back to the private runtime published under the state directory before
+        # it ever reaches for a system Python.
+        text = (ROOT / "scripts" / "unix" / "codex_bridge_manager.sh").read_text(encoding="utf-8-sig")
+        self.assertIn('$CPB_STATE_DIR/runtime/python/bin/python3', text)
+        self.assertIn('$CPB_STATE_DIR/runtime/python/cpython-*/bin/python3', text)
+        self.assertLess(text.index('$CPB_STATE_DIR/runtime/python/bin/python3'),
+                        text.index('elif command -v python3'))
+
     def test_double_click_macos_entrypoint_is_location_independent(self):
         path = ROOT / "Start CodexBridge.command"
         text = path.read_text(encoding="utf-8-sig")
@@ -229,6 +240,21 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn('btn_repair="Repair"', start)
         self.assertIn("right-click CodexBridge.app, choose Open", start)
 
+    def test_macos_bootstrap_publishes_portable_runtime_to_stable_state_dir(self):
+        # The extracted ZIP folder is disposable: deleting it after setup is a
+        # normal thing to do. The private Python runtime must therefore be
+        # published into the state directory (with ditto, which preserves the
+        # distribution's symlinks) and the shim must point there, never into
+        # the disposable extracted folder.
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertIn('PY_ROOT="$RUNTIME_ROOT/python"', start)
+        self.assertIn('/usr/bin/ditto "$ROOT/runtime/python" "$PY_ROOT"', start)
+        self.assertIn('ln -sfn "$PY_ROOT/bin/python3" "$APP_ROOT/python3"', start)
+        self.assertNotIn('ln -sfn "$ROOT/runtime/python/bin/python3" "$APP_ROOT/python3"', start)
+        # The runtime is published before any system Python is considered.
+        self.assertLess(start.index('/usr/bin/ditto "$ROOT/runtime/python" "$PY_ROOT"'),
+                        start.index('existing="$(find_system_python'))
+
     def test_macos_bootstrap_proves_real_start_before_reporting_ready(self):
         # `open` returns 0 even when Gatekeeper later refuses the app, so Ready
         # must be gated on an actual running menu bar process, never assumed.
@@ -254,6 +280,22 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("right-click CodexBridge.app, choose Open", start)
         self.assertNotIn("xattr -dr com.apple.quarantine", start)
         self.assertNotIn("spctl --master-disable", start)
+
+    def test_macos_launcher_start_failure_is_actionable(self):
+        # A failed start must not be a dead end: the dialog shows the manager's
+        # reason, offers Retry and Open Bridge Log, and records the reason in
+        # launcher.log. The controller must surface the manager output instead
+        # of collapsing it to a Bool and discarding it.
+        source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")
+        self.assertIn("func bridgeStartFailureDetail(", source)
+        self.assertIn("func notifyBridgeStartFailure(", source)
+        self.assertIn("func notifyBridgeFailure(", source)
+        self.assertIn('func ensureBridge() -> CommandResult', source)
+        self.assertIn('func restartBridge() -> CommandResult', source)
+        self.assertIn('alert.addButton(withTitle: controller.copy.text("Retry", "重试"))', source)
+        self.assertIn('alert.addButton(withTitle: controller.copy.text("Open Bridge Log", "打开 Bridge 日志"))', source)
+        self.assertIn('logLauncher("Bridge start/restart failed:', source)
+        self.assertNotIn("if !controller.ensureBridge()", source)
 
     def test_macos_menu_bar_reports_third_party_blocked_when_proxy_missing(self):
         source = (ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift").read_text(encoding="utf-8")

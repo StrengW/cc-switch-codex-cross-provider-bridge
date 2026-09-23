@@ -229,6 +229,13 @@ resolve_python() {
         :
     elif [[ -x "$CPB_BUNDLED_PYTHON" ]]; then
         CPB_PYTHON="$CPB_BUNDLED_PYTHON"
+    elif [[ -x "$CPB_STATE_DIR/runtime/python/bin/python3" ]]; then
+        # The app-private runtime published by Start CodexBridge.command keeps
+        # the Bridge startable even when its shim was lost or still points into
+        # a since-deleted extracted ZIP folder.
+        CPB_PYTHON="$CPB_STATE_DIR/runtime/python/bin/python3"
+    elif compgen -G "$CPB_STATE_DIR/runtime/python/cpython-*/bin/python3" >/dev/null; then
+        CPB_PYTHON="$(compgen -G "$CPB_STATE_DIR/runtime/python/cpython-*/bin/python3" | head -n 1)"
     elif command -v python3 >/dev/null 2>&1; then
         CPB_PYTHON="$(command -v python3)"
     elif command -v python >/dev/null 2>&1; then

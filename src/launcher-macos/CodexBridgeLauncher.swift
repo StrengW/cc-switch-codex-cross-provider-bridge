@@ -186,14 +186,17 @@ final class LauncherController {
         return result
     }
 
+    // Returns the full manager result, not just the exit code: the failure
+    // dialog needs the manager's reason ("Error: ..." on stderr) to be
+    // actionable instead of a dead end.
     @discardableResult
-    func ensureBridge() -> Bool {
-        runner.run("/bin/bash", [paths.manager, "start", "--background"]).status == 0
+    func ensureBridge() -> CommandResult {
+        runner.run("/bin/bash", [paths.manager, "start", "--background"])
     }
 
     @discardableResult
-    func restartBridge() -> Bool {
-        runner.run("/bin/bash", [paths.manager, "restart", "--background"]).status == 0
+    func restartBridge() -> CommandResult {
+        runner.run("/bin/bash", [paths.manager, "restart", "--background"])
     }
 
     @discardableResult
@@ -469,10 +472,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ensureBridgeOnLaunch() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let ok = self.controller.ensureBridge()
+            let result = self.controller.ensureBridge()
             DispatchQueue.main.async {
-                if !ok {
-                    self.notify(self.controller.copy.text("Could not start the Bridge.", "无法启动 Bridge。"))
+                if result.status != 0 {
+                    self.notifyBridgeStartFailure(result.output)
                 }
                 self.refreshStatus()
             }
@@ -685,6 +688,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert(); alert.messageText = "CodexBridge"; alert.informativeText = message; alert.alertStyle = .warning; alert.runModal()
     }
 
+    // The manager reports why a start or restart failed on stderr ("Error: ..."),
+    // and the runner merges stderr into the output. Show that reason instead of a
+    // dead-end dialog, and record it in launcher.log for later diagnosis.
+    private func bridgeStartFailureDetail(_ output: String) -> String {
+        for line in output.split(separator: "\n") {
+            if line.hasPrefix("Error: ") {
+                return String(line.dropFirst("Error: ".count))
+            }
+        }
+        return ""
+    }
+
+    private func notifyBridgeStartFailure(_ output: String) {
+        notifyBridgeFailure(controller.copy.text("Could not start the Bridge.", "无法启动 Bridge。"), output: output)
+    }
+
+    private func notifyBridgeFailure(_ message: String, output: String) {
+        let detail = bridgeStartFailureDetail(output)
+        logLauncher("Bridge start/restart failed: \(detail.isEmpty ? output : detail)")
+        let alert = NSAlert()
+        alert.messageText = message
+        var body = detail
+        if !body.isEmpty { body += "\n\n" }
+        body += controller.copy.text("Retry tries again; Open Bridge Log shows the recorded details.", "可以点“重试”再试一次；“打开 Bridge 日志”查看记录的详细原因。")
+        alert.informativeText = body
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: controller.copy.text("Retry", "重试"))
+        alert.addButton(withTitle: controller.copy.text("Open Bridge Log", "打开 Bridge 日志"))
+        alert.addButton(withTitle: controller.copy.text("Close", "关闭"))
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            let retry = controller.ensureBridge()
+            if retry.status != 0 {
+                notifyBridgeFailure(message, output: retry.output)
+            } else {
+                refreshStatus()
+            }
+        } else if response == .alertSecondButtonReturn {
+            _ = controller.open(controller.paths.bridgeLog)
+        }
+    }
+
     private func configureNoAsDefaultButton(_ alert: NSAlert) {
         alert.buttons.last?.keyEquivalent = "\r"
     }
@@ -722,8 +767,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if alert.runModal() == .alertFirstButtonReturn { _ = controller.open(url.path.isEmpty ? ReleaseUpdateChecker.releaseURL.absoluteString : url.absoluteString) }
     }
 
-    @objc private func ensureBridge() { if !controller.ensureBridge() { notify(controller.copy.text("Could not start the Bridge.", "无法启动 Bridge。")) }; refreshStatus() }
-    @objc private func restartBridge() { if !controller.restartBridge() { notify(controller.copy.text("Could not restart the Bridge.", "无法重启 Bridge。")) }; refreshStatus() }
+    @objc private func ensureBridge() {
+        let result = controller.ensureBridge()
+        if result.status != 0 { notifyBridgeStartFailure(result.output) }
+        refreshStatus()
+    }
+
+    @objc private func restartBridge() {
+        let result = controller.restartBridge()
+        if result.status != 0 { notifyBridgeFailure(controller.copy.text("Could not restart the Bridge.", "无法重启 Bridge。"), output: result.output) }
+        refreshStatus()
+    }
     @objc private func restartCodex() { if !controller.restartCodex() { notify(controller.copy.text("Codex was not running or could not be restarted.", "Codex 未运行或无法重启。")) } }
     @objc private func openBridgeLog() { _ = controller.open(controller.paths.bridgeLog) }
     @objc private func openWatcherLog() { _ = controller.open(controller.paths.watcherLog) }

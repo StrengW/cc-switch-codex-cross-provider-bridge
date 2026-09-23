@@ -4,11 +4,16 @@ CodexBridge follows semantic public release versions from the repository-root `V
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-23
+
 ### Fixed
 
 - Fixed the root cause behind macOS users seeing "CodexBridge.app is damaged and can't be opened. You should move it to the Trash." An unsigned bundle whose inner executable still carries a signature is judged as damaged by Gatekeeper, and that dialog has no user escape (not even Open Anyway), so the documented right-click/Open-Anyway steps could never work for it. The macOS Release build now ad-hoc signs the app bundle in the unsigned path and proves it with `codesign --verify --deep --strict`; the staged bundle is copied with `ditto` (Apple's recommended bundle copy) instead of `cp -R`, and the archive check re-verifies the signature after unpacking.
 - `Start CodexBridge.command` now installs the app bundle with `ditto` and gives the installed copy a local ad-hoc signature whenever it does not already verify (a bundle that verifies, including future Developer ID-signed builds, is left untouched), so an older or damaged download is repaired on the spot instead of failing with "damaged". The failure diagnostics now also report a missing or invalid bundle signature.
 - The macOS startup failure dialog now follows the system language (`AppleLocale`): Chinese systems get Chinese dialog and terminal guidance, English systems keep the English texts, and both stay version-aware (Sequoia+ -> System Settings > Privacy & Security > Open Anyway; macOS 14 and earlier -> right-click -> Open). The dialog gained an explicitly consented repair button ("帮我修复" / "Repair") that touches CodexBridge.app only (local re-sign plus removing that app's quarantine flag); without that click nothing is stripped, and system security settings are never changed.
+- Fixed the macOS Bridge becoming permanently unstartable after the extracted download folder was deleted. Setup linked the private Python runtime into the extracted ZIP folder, so cleaning up the download broke the runtime and the Bridge could only fall back to an older system Python it refuses to run. `Start CodexBridge.command` now publishes the bundled runtime into the state directory (`Application Support/CodexProviderBridge/runtime/python`) with `ditto` and points the shim there; existing installs migrate on the next script run, and the download folder is disposable afterwards.
+- The macOS manager now falls back to that private state-directory runtime when the shim is missing or stale, instead of dropping straight to a system Python.
+- The macOS "Could not start the Bridge" dialog is no longer a dead end: it now shows the manager's actual failure reason (`Error: ...` from stderr), records it in `launcher.log`, and offers Retry and Open Bridge Log (a failed restart gets the same treatment).
 
 ### Docs
 

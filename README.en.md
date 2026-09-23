@@ -144,7 +144,7 @@ First, decide which case applies to you:
 Prerequisites: Codex is installed and ChatGPT Official sign-in works.
 
 1. Download and extract the package for your chip: Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`; Intel → `CodexBridge-macOS-Intel-unsigned.zip`.
-2. Double-click **`Start CodexBridge.command`**. If macOS blocks the first launch, approve it once using the step for your system version in Option C.
+2. Double-click **`Start CodexBridge.command`**. If macOS blocks the first launch, approve it once using the step for your system version in Option C. After setup you can delete the extracted download folder: the Bridge runs from its private copy under `Application Support` and no longer depends on the folder.
 3. Watch the terminal: **it only truly started when you see `[CodexBridge] Ready.` together with `Menu bar launcher: running`**. If it shows `Launcher failed to start`, the script opens the folder and shows a dialog in your system language; click **Repair** in that dialog to have the script repair `CodexBridge.app` locally (re-sign plus removing that app's quarantine flag); it reopens automatically when the repair succeeds.
 4. Click the **CodexBridge** menu bar icon and confirm **Status = Running** and **Route = Official**.
 5. Open your existing Codex conversation and keep sending.

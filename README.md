@@ -144,7 +144,7 @@ macOS 目前是 **Beta / CI 验证**，Release 为 `-unsigned`（暂未做 Apple
 前提：Codex 已安装、ChatGPT Official 登录正常。
 
 1. 下载与芯片对应的包并解压：Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`；Intel → `CodexBridge-macOS-Intel-unsigned.zip`。
-2. 双击 **`Start CodexBridge.command`**；首次若被 macOS 拦截，按上文“方式 C”里对应你系统版本的步骤放行一次。
+2. 双击 **`Start CodexBridge.command`**；首次若被 macOS 拦截，按上文“方式 C”里对应你系统版本的步骤放行一次。安装完成后，解压出来的下载文件夹可以删除：Bridge 使用 `Application Support` 里的私有副本运行，不依赖下载文件夹。
 3. 看终端：**只有出现 `[CodexBridge] Ready.` 且 `Menu bar launcher: running` 才算真的启动成功**。若显示 `Launcher failed to start`，脚本会自动打开文件夹并弹出提示（中文系统显示中文）；点弹窗里的“帮我修复”可让脚本对 `CodexBridge.app` 做一次本地修复（本地重新签名 + 清除该应用的隔离标记），修复成功会自动重新打开。
 4. 点菜单栏 **CodexBridge** 图标，确认 **状态 = 运行中**、**路由 = Official**。
 5. 打开你原来的 Codex 会话，直接继续发送。

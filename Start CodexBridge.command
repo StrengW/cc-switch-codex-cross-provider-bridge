@@ -46,14 +46,26 @@ find_system_python() {
 
 ensure_python() {
   local existing uv py
-  if [[ -L "$APP_ROOT/python3" || -x "$APP_ROOT/python3" ]] && python_ok "$APP_ROOT/python3"; then
+  # Publish the portable runtime to its stable home inside the state directory
+  # first (idempotent). The extracted ZIP folder is disposable - deleting it
+  # after setup is a normal thing to do - so nothing may keep depending on it.
+  # ditto preserves the symlinks inside the Python distribution and merges
+  # into an existing destination, so a re-run also migrates older installs.
+  if [[ -x "$ROOT/runtime/python/bin/python3" ]] && ! python_ok "$PY_ROOT/bin/python3"; then
+    echo "[CodexBridge] Installing the private Python runtime into $PY_ROOT ..." >&2
+    mkdir -p "$RUNTIME_ROOT"
+    rm -rf -- "$PY_ROOT"
+    /usr/bin/ditto "$ROOT/runtime/python" "$PY_ROOT" || true
+  fi
+  if python_ok "$PY_ROOT/bin/python3"; then
+    ln -sfn "$PY_ROOT/bin/python3" "$APP_ROOT/python3"
     printf '%s\n' "$APP_ROOT/python3"
     return 0
   fi
 
-  # CI/self-contained packages may already include a portable runtime.
-  if python_ok "$ROOT/runtime/python/bin/python3"; then
-    ln -sfn "$ROOT/runtime/python/bin/python3" "$APP_ROOT/python3"
+  # Older installs may already carry a working shim (for example to a system
+  # Python or to a uv-managed interpreter); keep it when it verifies.
+  if [[ -L "$APP_ROOT/python3" || -x "$APP_ROOT/python3" ]] && python_ok "$APP_ROOT/python3"; then
     printf '%s\n' "$APP_ROOT/python3"
     return 0
   fi
