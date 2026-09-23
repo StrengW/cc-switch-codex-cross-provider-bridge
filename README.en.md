@@ -19,7 +19,11 @@ Move between **OpenAI Official**, **DeepSeek**, **GLM**, and **Qwen** in Codex w
 
 > CodexBridge is an **unofficial CC Switch companion**. It is not an official OpenAI or CC Switch component.
 
-> **macOS users, read this first**: the current Release is not Apple-signed or notarized (filenames include `-unsigned`), so Gatekeeper blocks it on first launch. **On macOS 15 Sequoia and later, “Right-click → Open” no longer approves an unsigned app** — go to **System Settings → Privacy & Security** and click **Open Anyway** near the bottom. On macOS 14 and earlier, Right-click → Open still works. Full steps are in the macOS section below.
+> **macOS users, read this first**: the Release is not Apple Developer signed or notarized (filenames include `-unsigned`), so macOS may block it on first launch. Approve it once, according to your system version:
+> - **macOS 15 Sequoia and later**: open System Settings → Privacy & Security, click **Open Anyway** near the bottom, then run `Start CodexBridge.command` again.
+> - **macOS 14 and earlier**: Right-click `CodexBridge.app` → Open → click Open again.
+>
+> Do not click "Move to Trash". If it still fails, run `Start CodexBridge.command` again and click **Repair** in the dialog (it repairs this app only and never touches system security settings). Full steps are in the macOS section below.
 
 ## 30-second overview
 
@@ -115,13 +119,18 @@ Start CodexBridge.command
 
 macOS is currently **Beta**. The Release is not yet Apple Developer signed/notarized, so the filename includes `-unsigned`.
 
-If Gatekeeper prompts on first launch, use Finder **Right-click → Open** once on `Start CodexBridge.command`. Do not disable Gatekeeper. The startup script **never** silently clears the quarantine flag or changes your system security policy: it opens the menu bar app and then **verifies the process actually started**, printing `[CodexBridge] Ready.` only after it confirms success. If `CodexBridge.app` was blocked by Gatekeeper, the script reports the failure clearly, opens the containing folder for you, and shows a dialog guiding you to **Right-click → Open** that app once (after that one approval it works normally, with no manual `xattr`; on macOS 15 Sequoia “Right-click → Open” does not work — use System Settings → Privacy & Security → Open Anyway). See the macOS section below for the full steps.
+If macOS blocks the first launch, approve it once according to your system version:
+
+- **macOS 15 Sequoia and later**: open System Settings → Privacy & Security, click **Open Anyway** near the bottom, then run `Start CodexBridge.command` again.
+- **macOS 14 and earlier**: in Finder, **Right-click → Open** `CodexBridge.app`, then click **Open** again.
+
+Do not click "Move to Trash" and do not disable Gatekeeper. The startup script **verifies the menu bar process actually started** and prints `[CodexBridge] Ready.` only after it confirms success. If it fails, it shows a dialog in your system language with a one-click **Repair** button (the script repairs `CodexBridge.app` only and never touches system security settings). See the macOS section below for the full steps.
 
 After startup, CodexBridge appears as a native Menu Bar app without a Dock icon. Login starts only the lightweight watcher; when the user opens CC Switch, the watcher starts the CodexBridge menu bar app and Bridge. CodexBridge never revives CC Switch in the background on a proxy drop or after you close it, and never launches it via discovery/remembered/default paths; the single exception is the Provider/auth switch repair flow, where - when provably needed - it performs one controlled restart of the currently-bound CC Switch instance to repair the login state (same as Windows). Closing the UI does not stop the background Bridge; confirmed `Exit CodexBridge...` stops the full Launcher, Bridge, and CC Switch while keeping the watcher.
 
 ### macOS: prerequisites and first-time use
 
-macOS is currently **Beta / CI-validated**, and the Release is `-unsigned` (not yet Apple Developer signed/notarized). The author has not done on-device regression for every macOS version / chip / Codex version combination, so please note all three when reporting an issue.
+macOS is currently **Beta / CI-validated**, and the Release is `-unsigned` (not yet Apple Developer signed/notarized); the first launch needs one approval (see Option C above). The author has not done on-device regression for every macOS version / chip / Codex version combination, so please note all three when reporting an issue.
 
 First, decide which case applies to you:
 
@@ -135,8 +144,8 @@ First, decide which case applies to you:
 Prerequisites: Codex is installed and ChatGPT Official sign-in works.
 
 1. Download and extract the package for your chip: Apple Silicon → `CodexBridge-macOS-AppleSilicon-unsigned.zip`; Intel → `CodexBridge-macOS-Intel-unsigned.zip`.
-2. Double-click **`Start CodexBridge.command`**. If Gatekeeper blocks it on first launch, use Finder **Right-click → Open** once on it.
-3. Watch the terminal: **it only truly started when you see `[CodexBridge] Ready.` together with `Menu bar launcher: running`**. If it shows `Launcher failed to start` and reports a Gatekeeper block, the script automatically opens the folder and shows a dialog guiding you: **Right-click → Open** the `CodexBridge.app` inside, then click **Open** again (approve once; do not move it to the Trash, do not disable Gatekeeper, and do not run `xattr` by hand; on macOS 15 Sequoia use System Settings → Privacy & Security → Open Anyway).
+2. Double-click **`Start CodexBridge.command`**. If macOS blocks the first launch, approve it once using the step for your system version in Option C.
+3. Watch the terminal: **it only truly started when you see `[CodexBridge] Ready.` together with `Menu bar launcher: running`**. If it shows `Launcher failed to start`, the script opens the folder and shows a dialog in your system language; click **Repair** in that dialog to have the script repair `CodexBridge.app` locally (re-sign plus removing that app's quarantine flag); it reopens automatically when the repair succeeds.
 4. Click the **CodexBridge** menu bar icon and confirm **Status = Running** and **Route = Official**.
 5. Open your existing Codex conversation and keep sending.
 
@@ -151,7 +160,7 @@ Additional prerequisites: CC Switch is installed and running, its Codex local pr
 5. Return to the original Codex conversation and keep sending. After a switch you do **not** need to restart CC Switch or edit `config.toml` by hand; if a login-state repair is provably needed, CodexBridge automatically performs one controlled restart of the bound CC Switch instance and reloads Codex (same as Windows).
 
 > **Conversation-migration toggle**: CodexBridge implements cross-provider session continuity on its own and does **not** depend on CC Switch's “conversation migration” toggle. Please note that toggle's state when reporting an issue, but we never insist that you must turn it on or off.
-> If Apple Developer ID signing + notarization is configured later (already reserved in CI), the “is damaged / right-click to open / Open Anyway” step disappears; the current build is unsigned.
+> If Apple Developer ID signing + notarization is configured later (already reserved in CI), the one-time approval step disappears too. The current build has no Apple signature, but the bundled `CodexBridge.app` now carries a complete local (ad-hoc) signature: freshly downloaded packages no longer show the “is damaged, move to Trash” dialog and go through the normal Open Anyway / Right-click → Open flow. In the rare case it still fails, click **Repair** in the startup script dialog.
 
 ## Everyday use (Windows)
 

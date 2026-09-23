@@ -148,7 +148,7 @@ jobs:
           if [[ "$available" == "true" ]]; then
             echo "Apple signing/notarization credentials are available."
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "::notice::Apple signing credentials are not configured. This tag will publish clearly labeled unsigned macOS Release assets; Gatekeeper may require Finder Right-click → Open on first launch."
+            echo "::notice::Apple signing credentials are not configured. This tag will publish clearly labeled unsigned macOS Release assets (ad-hoc signed so Gatekeeper shows the standard unverified-developer flow); macOS 15+ users approve them via System Settings -> Privacy & Security -> Open Anyway."
           else
             echo "::notice::Apple signing credentials are not configured. This run will produce unsigned macOS CI artifacts only."
           fi
@@ -170,7 +170,7 @@ jobs:
           cp scripts/unix/codex_bridge_watcher.sh "$stage/scripts/unix/"
           cp scripts/unix/codex_bridge_uninstall.sh "$stage/scripts/unix/"
           cp src/bridge/codex_provider_bridge.py "$stage/src/bridge/"
-          cp -R "$RUNNER_TEMP/CodexBridge.app" "$stage/CodexBridge.app"
+          /usr/bin/ditto "$RUNNER_TEMP/CodexBridge.app" "$stage/CodexBridge.app"
           cp README.md README.en.md VERSION CHANGELOG.md SECURITY.md "$stage/"
           mkdir -p "$stage/docs"
           cp docs/ARCHITECTURE.md docs/COMPATIBILITY.md docs/VERSIONING.md docs/PROJECT_OVERVIEW.zh-CN.md "$stage/docs/"
@@ -206,6 +206,21 @@ jobs:
 
           version="$(tr -d '[:space:]' < VERSION)"
           echo "CodexBridge $version / ${{ github.ref_name }} / ${{ matrix.arch }}" > "$stage/BUILD.txt"
+
+      - name: Ad-hoc sign unsigned macOS app bundle
+        if: steps.apple-signing.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/CodexBridge Portable 测试 with spaces/CodexBridge"
+          # Without Apple credentials the bundle must still be internally
+          # consistent: Gatekeeper reports a bundle as "damaged" - a dialog with
+          # no user escape - when its inner executable carries a signature but
+          # the outer bundle has none. An ad-hoc signature restores integrity,
+          # so users get the standard unverified-developer flow that Open Anyway
+          # (macOS 15+) or Right-click -> Open (macOS 14-) clears.
+          /usr/bin/codesign --force --deep --sign - "$stage/CodexBridge.app"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$stage/CodexBridge.app"
+          echo "Ad-hoc signed the unsigned CodexBridge.app bundle."
 
       - name: Import Developer ID certificate
         if: steps.apple-signing.outputs.available == 'true'
@@ -315,6 +330,7 @@ jobs:
           test -f "$verify/CodexBridge/BUILD.txt"
           test -f "$verify/CodexBridge/docs/ARCHITECTURE.md"
           test -f "$verify/CodexBridge/docs/COMPATIBILITY.md"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$verify/CodexBridge/CodexBridge.app"
 
       - name: Notarize tagged macOS archive
         if: startsWith(github.ref, 'refs/tags/') && steps.apple-signing.outputs.available == 'true'

@@ -76,6 +76,20 @@ class MacOSPortabilityContractTests(unittest.TestCase):
         self.assertIn("arm64", text)
         self.assertIn("x86_64", text)
 
+    def test_macos_workflow_adhoc_signs_unsigned_bundle_before_packaging(self):
+        # Without Apple credentials the bundle must still be internally
+        # consistent or Gatekeeper shows the unrecoverable "damaged" dialog.
+        # The unsigned path ad-hoc signs the staged bundle and proves it with a
+        # strict verification; the archive check re-verifies after unpacking.
+        text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
+        self.assertIn("Ad-hoc sign unsigned macOS app bundle", text)
+        self.assertIn('codesign --force --deep --sign - "$stage/CodexBridge.app"', text)
+        self.assertIn('codesign --verify --deep --strict --verbose=2 "$stage/CodexBridge.app"', text)
+        self.assertIn("steps.apple-signing.outputs.available != 'true'", text)
+        self.assertNotIn('cp -R "$RUNNER_TEMP/CodexBridge.app"', text)
+        self.assertIn('/usr/bin/ditto "$RUNNER_TEMP/CodexBridge.app" "$stage/CodexBridge.app"', text)
+        self.assertIn('codesign --verify --deep --strict --verbose=2 "$verify/CodexBridge/CodexBridge.app"', text)
+
     def test_macos_workflow_runs_on_main_push_and_tags(self):
         text = (ROOT / ".github" / "workflows" / "build-macos-release.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", text)
@@ -169,6 +183,9 @@ class MacOSPortabilityContractTests(unittest.TestCase):
     def test_macos_bootstrap_never_silently_bypasses_gatekeeper(self):
         # Never silently strip quarantine, disable Gatekeeper, or escalate. A
         # read-only `xattr -p com.apple.quarantine` detection is still allowed.
+        # The ONLY quarantine write lives inside the consented repair function
+        # (repair_gatekeeper_block), and that function is called only from the
+        # repair-button branch the user explicitly clicks.
         start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
         watcher = (ROOT / "scripts" / "unix" / "codex_bridge_watcher.sh").read_text(encoding="utf-8-sig")
         for text in (start, watcher):
@@ -176,6 +193,41 @@ class MacOSPortabilityContractTests(unittest.TestCase):
             self.assertNotIn("clear_quarantine", text)
             self.assertNotIn("spctl --master-disable", text)
             self.assertNotIn("sudo", text)
+        self.assertEqual(start.count("xattr -cr"), 1)
+        self.assertIn("repair_gatekeeper_block() {", start)
+        self.assertGreater(start.index("xattr -cr"), start.index("repair_gatekeeper_block() {"))
+        gate_idx = start.index('if [[ "$choice" == "$btn_repair" ]]; then')
+        call_idx = start.index("    repair_gatekeeper_block\n")
+        self.assertGreater(call_idx, gate_idx)
+
+    def test_macos_bootstrap_copies_bundle_with_ditto_and_repairs_signature(self):
+        # Gatekeeper reports an app bundle as "damaged" (a dialog with no user
+        # escape) when its inner executable carries a signature but the outer
+        # bundle has none. The installed copy must therefore be produced with
+        # Apple's recommended bundle copy (ditto, not a plain recursive cp) and
+        # must be locally ad-hoc signed whenever it does not already verify;
+        # bundles that verify (including future Developer ID builds) stay as-is.
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertNotIn('cp -R "$source_app"', start)
+        self.assertIn('/usr/bin/ditto "$source_app" "$LAUNCHER_APP"', start)
+        self.assertIn("ensure_local_signature() {", start)
+        self.assertIn('codesign --verify --deep --strict "$LAUNCHER_APP"', start)
+        self.assertIn('codesign --force --deep --sign - "$LAUNCHER_APP"', start)
+        self.assertLess(start.index("ensure_local_signature() {"), start.index("install_launcher_app() {"))
+
+    def test_macos_bootstrap_gatekeeper_dialog_follows_system_language(self):
+        # A Chinese-language Mac must not get an English-only wall of text: the
+        # failure dialog and its terminal guidance follow AppleLocale, stay
+        # version-aware, and offer the explicitly consented repair button. The
+        # English texts remain for non-Chinese systems.
+        start = (ROOT / "Start CodexBridge.command").read_text(encoding="utf-8-sig")
+        self.assertIn("defaults read -g AppleLocale", start)
+        self.assertIn("zh*) user_lang=zh", start)
+        self.assertIn("系统设置 > 隐私与安全性", start)
+        self.assertIn("仍要打开", start)
+        self.assertIn("帮我修复", start)
+        self.assertIn('btn_repair="Repair"', start)
+        self.assertIn("right-click CodexBridge.app, choose Open", start)
 
     def test_macos_bootstrap_proves_real_start_before_reporting_ready(self):
         # `open` returns 0 even when Gatekeeper later refuses the app, so Ready

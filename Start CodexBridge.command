@@ -109,6 +109,30 @@ EOF
   fi
 }
 
+ensure_local_signature() {
+  # Gatekeeper reports a bundle as "damaged" - a state with no user escape -
+  # when its inner executable carries a signature but the outer bundle has none
+  # (or was invalidated in transit). A bundle that already verifies (including
+  # future Developer ID-signed builds) is left untouched; an unverifiable one
+  # gets a local ad-hoc signature, so Gatekeeper shows its normal
+  # unverified-developer flow instead. No Apple account is involved and no
+  # Gatekeeper or system security setting is changed.
+  if ! /usr/bin/codesign --verify --deep --strict "$LAUNCHER_APP" >/dev/null 2>&1; then
+    /usr/bin/codesign --force --deep --sign - "$LAUNCHER_APP" >/dev/null 2>&1 || true
+  fi
+}
+
+repair_gatekeeper_block() {
+  # Explicitly consented repair: only reachable after the user clicks the repair
+  # button in the failure dialog. It touches CodexBridge.app only - a local
+  # re-sign when the bundle does not verify, plus removal of this app's
+  # quarantine flag. System security settings and Gatekeeper are never touched.
+  if ! /usr/bin/codesign --verify --deep --strict "$LAUNCHER_APP" >/dev/null 2>&1; then
+    /usr/bin/codesign --force --deep --sign - "$LAUNCHER_APP" >/dev/null 2>&1 || true
+  fi
+  /usr/bin/xattr -cr "$LAUNCHER_APP" >/dev/null 2>&1 || true
+}
+
 install_launcher_app() {
   local version source_app app_binary plist_template
   source_app="$ROOT/CodexBridge.app"
@@ -116,8 +140,11 @@ install_launcher_app() {
   plist_template="$ROOT/src/launcher-macos/Info.plist.in"
   if [[ -d "$source_app" ]]; then
     rm -rf -- "$LAUNCHER_APP"
-    cp -R "$source_app" "$LAUNCHER_APP"
+    # ditto is Apple's recommended bundle copy; it preserves the metadata and
+    # code signature that a plain recursive cp does not guarantee.
+    /usr/bin/ditto "$source_app" "$LAUNCHER_APP"
     chmod +x "$app_binary"
+    ensure_local_signature
     return 0
   fi
   if [[ -f "$ROOT/src/launcher-macos/CodexBridgeLauncher.swift" ]] && command -v swiftc >/dev/null 2>&1; then
@@ -127,6 +154,7 @@ install_launcher_app() {
     swiftc -O "$ROOT/src/launcher-macos/CodexBridgeLauncher.swift" -o "$app_binary"
     sed "s/@VERSION@/$version/g" "$plist_template" > "$LAUNCHER_APP/Contents/Info.plist"
     chmod +x "$app_binary"
+    ensure_local_signature
     return 0
   fi
   echo "[CodexBridge] Menu bar app bundle was not included and swiftc is unavailable; backend watcher will continue without UI." >&2
@@ -196,22 +224,85 @@ else
   if /usr/bin/xattr -p com.apple.quarantine "$LAUNCHER_APP" >/dev/null 2>&1; then
     echo "[CodexBridge] CodexBridge.app was blocked by macOS Gatekeeper." >&2
   fi
+  if ! /usr/bin/codesign --verify --deep --strict "$LAUNCHER_APP" >/dev/null 2>&1; then
+    echo "[CodexBridge] CodexBridge.app has no valid bundle signature (this is what makes macOS report it as damaged)." >&2
+  fi
   echo "[CodexBridge] The runtime was installed, but the menu bar launcher did not start." >&2
   # Give a normal-user action instead of expecting them to know xattr/Gatekeeper.
   /usr/bin/open "$APP_ROOT" >/dev/null 2>&1 || true
   # macOS 15 Sequoia removed the Right-click -> Open bypass for unsigned apps, so
-  # pick the guidance that matches the running system. Both dialogs are static
-  # single-quoted strings; the script never strips quarantine or disables Gatekeeper.
+  # pick the guidance that matches the running system, in the user's language.
+  # Nothing is stripped from the app unless the user clicks the repair button
+  # (repair_gatekeeper_block); system security settings are never touched.
   macos_major="$(/usr/bin/sw_vers -productVersion 2>/dev/null | cut -d. -f1 || true)"
   case "$macos_major" in
     ''|*[!0-9]*) macos_major=0 ;;
   esac
-  if [[ "$macos_major" -ge 15 ]]; then
-    echo "[CodexBridge] macOS 15 Sequoia or later: open System Settings -> Privacy & Security, click 'Open Anyway' near the bottom, then reopen." >&2
-    /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically because it is unsigned and macOS Gatekeeper blocked it. On macOS 15 Sequoia the Right-click -> Open shortcut no longer works. Open System Settings, go to Privacy & Security, scroll to the bottom and click Open Anyway, then open CodexBridge again. Do not move it to the Trash and do not disable Gatekeeper." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+  system_locale="$(/usr/bin/defaults read -g AppleLocale 2>/dev/null || true)"
+  case "$system_locale" in
+    zh*) user_lang=zh ;;
+    *) user_lang=en ;;
+  esac
+  if [[ "$user_lang" == "zh" ]]; then
+    btn_dismiss="我知道了"
+    btn_repair="帮我修复"
   else
-    echo "[CodexBridge] In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." >&2
-    /usr/bin/osascript -e 'display dialog "CodexBridge could not open its menu bar app automatically (macOS Gatekeeper may have blocked it). In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." with title "Codex Bridge" buttons {"OK"} default button "OK" with icon caution' >/dev/null 2>&1 || true
+    btn_dismiss="OK"
+    btn_repair="Repair"
+  fi
+  if [[ "$macos_major" -ge 15 ]]; then
+    if [[ "$user_lang" == "zh" ]]; then
+      echo "[CodexBridge] macOS 15 Sequoia 及以上：打开 系统设置 > 隐私与安全性，点底部的“仍要打开”，然后重新双击 Start CodexBridge.command。" >&2
+      dialog_body="CodexBridge 未能自动打开菜单栏 App：它没有 Apple 开发者签名，被 macOS 拦截。请打开 系统设置 > 隐私与安全性，点底部的“仍要打开”，然后重新双击 Start CodexBridge.command。不要把 CodexBridge 移到废纸篓，也不要关闭 Gatekeeper。若仍打不开，点“帮我修复”。"
+    else
+      echo "[CodexBridge] macOS 15 Sequoia or later: open System Settings -> Privacy & Security, click 'Open Anyway' near the bottom, then reopen." >&2
+      dialog_body="CodexBridge could not open its menu bar app: it is not signed by an Apple developer and macOS blocked it. Open System Settings > Privacy & Security, click Open Anyway near the bottom, then open Start CodexBridge.command again. Do not move it to the Trash and do not disable Gatekeeper. If it still fails, click Repair."
+    fi
+  else
+    if [[ "$user_lang" == "zh" ]]; then
+      echo "[CodexBridge] 在刚打开的文件夹里，右键 CodexBridge.app，选择“打开”，再点一次“打开”。" >&2
+      dialog_body="CodexBridge 未能自动打开菜单栏 App（可能被 macOS Gatekeeper 拦截）。在刚打开的文件夹里，右键 CodexBridge.app，选择“打开”，再点一次“打开”。若仍打不开，点“帮我修复”。"
+    else
+      echo "[CodexBridge] In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again." >&2
+      dialog_body="CodexBridge could not open its menu bar app automatically (macOS Gatekeeper may have blocked it). In the folder that just opened, right-click CodexBridge.app, choose Open, then click Open again. If it still fails, click Repair."
+    fi
+  fi
+  choice="$(/usr/bin/osascript <<OSA 2>/dev/null || true
+button returned of (display dialog "$dialog_body" with title "Codex Bridge" buttons {"$btn_dismiss", "$btn_repair"} default button "$btn_dismiss" with icon caution)
+OSA
+)"
+  if [[ "$choice" == "$btn_repair" ]]; then
+    repair_gatekeeper_block
+    if [[ "$user_lang" == "zh" ]]; then
+      echo "[CodexBridge] 已修复 CodexBridge.app，正在重新打开..." >&2
+    else
+      echo "[CodexBridge] Repaired CodexBridge.app; reopening it now..." >&2
+    fi
+    /usr/bin/open "$LAUNCHER_APP" >/dev/null 2>&1 || true
+    launcher_started=0
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      if launcher_running; then launcher_started=1; break; fi
+      sleep 0.5
+    done
+    if [[ "$launcher_started" -eq 1 ]]; then
+      echo "[CodexBridge] Ready."
+      echo "Menu bar launcher: running"
+      if /usr/bin/nc -z 127.0.0.1 15722 >/dev/null 2>&1; then
+        echo "Bridge: running"
+      else
+        echo "Bridge: starting (the menu bar app ensures it on launch)"
+      fi
+      echo "Runtime: $APP_ROOT"
+      echo "Logs: $STATE_ROOT"
+      echo "You can close this Terminal window."
+      sleep 2
+      exit 0
+    fi
+    if [[ "$user_lang" == "zh" ]]; then
+      echo "[CodexBridge] 修复后仍未启动。请重启电脑后再试，或重新下载最新的 Release。" >&2
+    else
+      echo "[CodexBridge] Still not running after the repair. Reboot and try again, or re-download the latest Release." >&2
+    fi
   fi
   echo "Logs: $STATE_ROOT" >&2
 fi
