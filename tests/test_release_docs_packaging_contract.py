@@ -72,8 +72,18 @@ def test_macos_release_package_ships_every_doc():
 def test_both_release_packages_ship_the_same_doc_set():
     # The two lists are maintained by hand on different platforms. Drift means
     # one audience silently loses a document the other one has.
-    windows = {Path(entry).name for entry in _windows_package_files() if entry.startswith("docs\\")}
-    macos = {Path(entry).name for entry in _macos_package_docs()}
+    #
+    # Both sides are reduced with plain string handling on purpose. Path().name
+    # would look tidier but answers per platform: the Windows entries carry a
+    # backslash, which PurePosixPath does not treat as a separator, so on macOS
+    # it returns "docs\ARCHITECTURE.md" whole while on Windows it returns
+    # "ARCHITECTURE.md". A cross-platform drift check that itself drifts with
+    # the host platform passes on the developer's machine and fails only in CI.
+    prefix = "docs\\"
+    windows = {
+        entry[len(prefix) :] for entry in _windows_package_files() if entry.startswith(prefix)
+    }
+    macos = {entry.rsplit("/", 1)[-1] for entry in _macos_package_docs()}
     assert windows == macos, f"the release packages disagree on docs: {windows ^ macos}"
 
 
