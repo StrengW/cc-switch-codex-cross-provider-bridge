@@ -368,4 +368,9 @@ def test_conversation_bridge_core_remains_unchanged():
 
 
 def test_manager_core_remains_unchanged():
-    assert _normalized_sha256(MANAGER) == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"
+    # Re-baselined for the sanctioned backup-retention change: the manager now
+    # caps the config.toml backups it writes beside the user's own config,
+    # keeping the newest three of each family instead of adding one per rewrite
+    # until a full uninstall removes them. The lifecycle logic it drives (start,
+    # repair, switch detection, stop) is unchanged.
+    assert _normalized_sha256(MANAGER) == "260c8ff75e9c139d62233838f7b6701acd6f279cb903d6949c55bb31a69ee052"

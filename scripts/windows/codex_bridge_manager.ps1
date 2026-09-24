@@ -556,6 +556,62 @@ function Remove-SectionTomlKey {
     }
 }
 
+function Remove-StaleBridgeBackups {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [int]$Keep = 3
+    )
+
+    # Housekeeping in a directory that is not ours. Both managers leave a
+    # timestamped backup beside the Codex config on every rewrite, and nothing
+    # used to remove them short of a full uninstall, so ordinary use slowly
+    # filled the user's .codex directory with our files. Each family is capped
+    # separately: a plain rewrite, a detach and a switch to the direct Official
+    # route back different recovery paths, and the most frequent family must not
+    # crowd out the last copy of a rarer one.
+    $directory = Split-Path -Parent $ConfigPath
+    $leaf = Split-Path -Leaf $ConfigPath
+    if ([string]::IsNullOrWhiteSpace($directory) -or
+        -not (Test-Path -LiteralPath $directory -PathType Container)) {
+        return
+    }
+
+    # The stamp is what makes this safe to run at all: only a file this Bridge
+    # wrote, in the exact shape it writes it, can be selected. The live config
+    # carries no stamp, and neither does anything the user or CC Switch owns.
+    $stampPattern = '-\d{8}-\d{6}-\d{3}$'
+    try {
+        $stale = Get-ChildItem -LiteralPath $directory -Filter "$leaf.bridge-*backup-*" -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name.StartsWith("$leaf.bridge-", [StringComparison]::Ordinal) -and
+                $_.Name -match $stampPattern
+            }
+        foreach ($family in ($stale | Group-Object { $_.Name -replace $stampPattern, '' })) {
+            # Ordered by the stamp in the name, never by the file's write time:
+            # the backup is the original config renamed or copied with its
+            # metadata preserved, so that time belongs to the config, not to the
+            # moment the backup was taken. The stamp is fixed width and zero
+            # filled, so name order is time order.
+            $family.Group |
+                Sort-Object Name -Descending |
+                Select-Object -Skip $Keep |
+                ForEach-Object {
+                    try {
+                        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                    } catch {
+                        # Held open by an editor or a real-time scanner. Leave it;
+                        # the next rewrite tries again.
+                    }
+                }
+        }
+    } catch {
+        Write-Verbose "Backup retention was skipped: $($_.Exception.Message)"
+    }
+}
+
 function Update-CodexConfig {
     param([Parameter(Mandatory = $true)][int]$Port)
 
@@ -686,6 +742,9 @@ function Update-CodexConfig {
     Write-Host "Updated Codex config: $CodexConfig"
     if ($null -ne $backup) {
         Write-Host "Backup created: $backup"
+        # Pruned after the new backup exists, so the copy just written is always
+        # counted among the ones that stay.
+        Remove-StaleBridgeBackups -ConfigPath $CodexConfig
     }
     return $backup
 }
@@ -1578,7 +1637,10 @@ function Prepare-DirectOfficialCustomConfig {
                 Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
             }
             Write-Host "Prepared direct Official custom-provider routing: $CodexConfig"
-            if ($null -ne $backup) { Write-Host "Direct-Official backup created: $backup" }
+            if ($null -ne $backup) {
+                Write-Host "Direct-Official backup created: $backup"
+                Remove-StaleBridgeBackups -ConfigPath $CodexConfig
+            }
         } else {
             Write-Host 'Codex custom provider already points directly to the Official ChatGPT Codex backend.'
         }

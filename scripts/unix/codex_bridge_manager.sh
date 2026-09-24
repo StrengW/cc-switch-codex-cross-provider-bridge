@@ -477,11 +477,51 @@ if updated == original:
     print(f"Codex config is already correct: {path}")
     raise SystemExit(0)
 
+def prune_stale_backups(path, keep=3):
+    """Drop all but the newest few backups of each family beside path.
+
+    Both managers leave a timestamped backup on every rewrite and nothing used
+    to remove them short of a full uninstall, so ordinary use slowly filled the
+    user's .codex directory with our files. Each family is capped separately: a
+    plain rewrite, a detach and a switch to the direct Official route back
+    different recovery paths, and the most frequent one must not crowd out the
+    last copy of a rarer one.
+
+    Ordered by the stamp in the name rather than by mtime, because shutil.copy2
+    preserves the source metadata: a backup's mtime belongs to the config, not
+    to the moment the backup was taken. The stamp is fixed width and zero
+    filled, so name order is time order.
+
+    Defined once in each embedded interpreter in this script. Every heredoc is
+    its own Python process and cannot see the other's definitions, so the two
+    copies have to stay identical; lifting this out of the shell is tracked
+    separately as duplicated config-rewrite logic.
+    """
+    pattern = re.compile(re.escape(path.name) + r"\.bridge-(.*backup)-(\d{8}-\d{6}-\d{3})$")
+    families = {}
+    try:
+        entries = list(path.parent.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        match = pattern.fullmatch(entry.name)
+        if match:
+            families.setdefault(match.group(1), []).append(entry)
+    for family in families.values():
+        family.sort(key=lambda item: item.name, reverse=True)
+        for stale in family[keep:]:
+            try:
+                stale.unlink()
+            except OSError:
+                # Held open or already gone; the next rewrite tries again.
+                pass
+
 backup = None
 if exists:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
     backup = path.with_name(path.name + ".bridge-backup-" + stamp)
     shutil.copy2(path, backup)
+    prune_stale_backups(path)
 
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, temporary_name = tempfile.mkstemp(prefix="." + path.name + ".bridge-tmp-", dir=path.parent)
@@ -761,10 +801,50 @@ remove_section_key(lines, custom_header, "experimental_bearer_token")
 updated = newline.join(lines)
 if had_final_newline:
     updated += newline
+def prune_stale_backups(path, keep=3):
+    """Drop all but the newest few backups of each family beside path.
+
+    Both managers leave a timestamped backup on every rewrite and nothing used
+    to remove them short of a full uninstall, so ordinary use slowly filled the
+    user's .codex directory with our files. Each family is capped separately: a
+    plain rewrite, a detach and a switch to the direct Official route back
+    different recovery paths, and the most frequent one must not crowd out the
+    last copy of a rarer one.
+
+    Ordered by the stamp in the name rather than by mtime, because shutil.copy2
+    preserves the source metadata: a backup's mtime belongs to the config, not
+    to the moment the backup was taken. The stamp is fixed width and zero
+    filled, so name order is time order.
+
+    Defined once in each embedded interpreter in this script. Every heredoc is
+    its own Python process and cannot see the other's definitions, so the two
+    copies have to stay identical; lifting this out of the shell is tracked
+    separately as duplicated config-rewrite logic.
+    """
+    pattern = re.compile(re.escape(path.name) + r"\.bridge-(.*backup)-(\d{8}-\d{6}-\d{3})$")
+    families = {}
+    try:
+        entries = list(path.parent.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        match = pattern.fullmatch(entry.name)
+        if match:
+            families.setdefault(match.group(1), []).append(entry)
+    for family in families.values():
+        family.sort(key=lambda item: item.name, reverse=True)
+        for stale in family[keep:]:
+            try:
+                stale.unlink()
+            except OSError:
+                # Held open or already gone; the next rewrite tries again.
+                pass
+
 if updated != original:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
     backup = path.with_name(path.name + ".bridge-direct-official-backup-" + stamp)
     shutil.copy2(path, backup)
+    prune_stale_backups(path)
     fd, temporary_name = tempfile.mkstemp(prefix="." + path.name + ".bridge-direct-official-tmp-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:

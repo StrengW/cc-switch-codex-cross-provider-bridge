@@ -85,9 +85,13 @@ def test_uninstall_feature_does_not_modify_bridge_or_manager_core():
     # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once, and the
     # Official-route HTTP upstream fix (route resolved once in _handle, guard
     # re-asserts its config keys every pass, retrying config reads);
-    # conversation-continuation core logic is unchanged. Manager core untouched.
+    # conversation-continuation core logic is unchanged.
+    # Manager re-baselined for the sanctioned backup-retention cap, which prunes
+    # the config.toml backups the manager itself writes. Uninstall behaviour is
+    # unchanged: it still restores the pre-install config and removes every
+    # artifact family.
     assert _normalized_sha256(BRIDGE) == "11bda5ae3300aecac9202c4e0885c5f68e7181b89d3ddb51284bd968d9a87a5f"
-    assert _normalized_sha256(MANAGER) == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"
+    assert _normalized_sha256(MANAGER) == "260c8ff75e9c139d62233838f7b6701acd6f279cb903d6949c55bb31a69ee052"
 
 
 def test_macos_uninstall_removes_every_bridge_artifact_family():
