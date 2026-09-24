@@ -2126,7 +2126,7 @@ namespace CodexBridgeLauncherApp
         private const string StartupRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValueName = "CodexBridgeLauncher";
         private const string UninstallRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBridge";
-        private const string ProductVersion = "0.2.1";
+        private const string ProductVersion = "0.2.2";
         internal static string PublicVersion { get { return ProductVersion; } }
 
         internal static string PowerShellExePath()
