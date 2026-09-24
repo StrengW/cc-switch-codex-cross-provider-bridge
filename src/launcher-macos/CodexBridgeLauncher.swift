@@ -798,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func uninstall() {
-        let alert = NSAlert(); alert.messageText = controller.copy.text("Uninstall CodexBridge?", "卸载 CodexBridge？"); alert.informativeText = controller.copy.text("This removes the Bridge app, runtime, logs, and launch agents. Codex chat history is not removed.", "这会删除 Bridge 应用、运行时、日志和启动项，不会删除 Codex 聊天记录。"); alert.alertStyle = .warning; alert.addButton(withTitle: controller.copy.text("Uninstall", "卸载")); alert.addButton(withTitle: controller.copy.text("Cancel", "取消")); configureNoAsDefaultButton(alert); if alert.runModal() == .alertFirstButtonReturn { if !controller.uninstall() { notify(controller.copy.text("Uninstall failed. See the launcher log.", "卸载失败，请查看 Launcher 日志。")) } else { NSApp.terminate(nil) } }
+        let alert = NSAlert(); alert.messageText = controller.copy.text("Uninstall CodexBridge?", "卸载 CodexBridge？"); alert.informativeText = controller.copy.text("This removes the Bridge app, runtime, logs, and launch agents. If Codex pointed at the local Bridge, its config is restored to the pre-install state or switched back to the direct Official route. Chat history is not removed.", "这会删除 Bridge 应用、运行时、日志和启动项。若 Codex 正指向本地 Bridge，其配置会恢复到安装前状态，或切回 Official 直连。聊天记录不会删除。"); alert.alertStyle = .warning; alert.addButton(withTitle: controller.copy.text("Uninstall", "卸载")); alert.addButton(withTitle: controller.copy.text("Cancel", "取消")); configureNoAsDefaultButton(alert); if alert.runModal() == .alertFirstButtonReturn { if !controller.uninstall() { notify(controller.copy.text("Uninstall failed. See the launcher log.", "卸载失败，请查看 Launcher 日志。")) } else { NSApp.terminate(nil) } }
     }
 }
 

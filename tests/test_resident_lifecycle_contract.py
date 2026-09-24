@@ -356,10 +356,15 @@ def test_conversation_bridge_core_remains_unchanged():
     # (_sanitize_log_text/_log plus wrapped print sites), and again for the
     # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once (a
     # selected model outside the known route models is a provider switch edge).
+    # Re-baselined again for the Official-route HTTP fix: _handle resolves the
+    # route once and sends Official /responses to the ChatGPT backend rather than
+    # to CC Switch, the guard re-asserts its own config keys every pass so
+    # supports_websockets cannot stay stale, config reads retry through a
+    # transient lock, and the unreferenced _set_config_catalog is removed.
     # The conversation continuation core (resp_/msg_ mapping, provider
     # continuation, resident-WS, portable replay, compatibility firewall, strict
     # tool repair, CompHash) is unchanged.
-    assert _normalized_sha256(BRIDGE) == "34b581c3ae07faa211a43a427a51ef88d0bc6356c92fbdb27dc01f5c60cbff84"
+    assert _normalized_sha256(BRIDGE) == "11bda5ae3300aecac9202c4e0885c5f68e7181b89d3ddb51284bd968d9a87a5f"
 
 
 def test_manager_core_remains_unchanged():

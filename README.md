@@ -63,7 +63,7 @@ OpenAI Official
 1. **先判断你是否需要 CC Switch——它是“路由入口”，不是 Codex 历史会话存在或恢复的前提：**
    - 如果你接下来要用、或要切换到**通过 CC Switch 配置的第三方 Provider**（DeepSeek / GLM / Qwen …），就**先安装并打开 CC Switch**，在里面配置好要用的 Provider。Provider 的添加、删除和切换始终由 CC Switch 负责。
    - 如果你现在**只登录 OpenAI Official**、继续 Codex 里以前的旧会话，**不需要**因为那条会话曾经走过第三方就先开 CC Switch。是否需要 CC Switch，只取决于“当前这条请求是否要走它”，而不取决于“这条历史会话以前是否走过第三方”。
-2. **再双击启动 CodexBridge**：Windows 双击 `Start CodexBridge.cmd`，macOS 双击 `Start CodexBridge.command`。首次运行会自动准备用户级 runtime，**不需要管理员权限，也不需要手动安装 Python**。
+2. **再双击启动 CodexBridge**：Windows 双击 `Start CodexBridge.cmd`，macOS 双击 `Start CodexBridge.command`。首次运行会自动准备用户级 runtime，**不需要管理员权限，不需要手动安装 Python，也不需要联网**——官方 Python 运行时已随 Release ZIP 内置。
 3. **打开 Codex 正常使用**。要换 Provider 时直接在 CC Switch 里切换，CodexBridge 会自动处理 Bridge 路由、模型列表和必要的 Codex 重启。
 4. **用第三方 Provider 时全程保持 CC Switch 开着**。启动后 CodexBridge 常驻系统托盘 / 菜单栏在后台工作，你不需要手动改 `config.toml`，也不需要每次切换后重启 CC Switch。
 
@@ -98,7 +98,9 @@ CodexBridge-Windows.zip
 Start CodexBridge.cmd
 ```
 
-首次运行会自动准备用户级 runtime 并完成初始化；**不需要管理员权限，也不需要手动安装 Python**。
+首次运行会自动准备用户级 runtime 并完成初始化；**不需要管理员权限，不需要手动安装 Python，也不需要联网**。
+
+> **首次运行不需要联网**：Release ZIP 已内置官方 Python 3.12 运行时（约 11 MB，Windows 为 amd64 版本），`Start CodexBridge.cmd` 会先校验它的 SHA-256，通过后解压到用户目录；托盘程序仍在本机编译。只有 ARM64／32 位 Windows，或内置包校验不通过时，才会改为联网下载，依次尝试 python.org、华为云、npmmirror，每个来源都要通过同一份固定 SHA-256 校验。若都失败，脚本会按你的系统语言说明原因，详细日志在 `%LOCALAPPDATA%\CodexProviderBridge\bootstrap.log`；此时检查网络或代理后重试，或自行安装 Python 3.10 及以上版本，脚本会自动改用它。
 
 > Windows 正式 Release **不再分发预编译 `CodexBridge-Setup.exe`**。不要为了运行 CodexBridge 关闭 Defender、关闭实时保护或给整个目录加白名单。
 
@@ -293,7 +295,9 @@ CodexBridge 会把 Codex 的 `base_url` 始终固定在本地 Bridge，避免切
 <details>
 <summary><strong>普通用户需要 Python 吗？</strong></summary>
 
-不需要手动安装。首次运行会自动准备用户级 runtime。
+不需要手动安装。首次运行会自动准备一份只属于当前用户的 Python 运行时，放在 `%LOCALAPPDATA%\CodexProviderBridge\runtime`（macOS 在 `~/Library/Application Support/CodexProviderBridge/runtime`），不写系统目录、不需要管理员权限。
+
+**Windows 首次运行同样不需要联网**：Release ZIP 已内置官方 Python 运行时（约 11 MB，amd64），脚本校验 SHA-256 后解压使用。只有 ARM64／32 位 Windows，或内置包校验失败时才会联网下载，依次尝试 python.org、华为云、npmmirror，三者校验同一份固定 SHA-256；都失败时脚本会按系统语言提示，并把原因写到 `%LOCALAPPDATA%\CodexProviderBridge\bootstrap.log`。此时检查网络或代理后重试，或自行安装 Python 3.10 或更高版本，脚本会自动改用它。macOS 的 Release ZIP 也已内置运行时。
 
 </details>
 

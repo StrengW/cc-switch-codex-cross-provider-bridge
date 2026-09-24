@@ -50,9 +50,29 @@ jobs:
         shell: powershell
         run: python -m pytest tests -v
 
+      - name: Fetch the official Python embeddable runtime for bundling
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Ship the upstream archive byte-for-byte so a user can reproduce this
+          # digest against python.org. amd64 covers nearly every Windows user;
+          # other architectures keep using the mirror download in the bootstrap.
+          $package = 'python-3.12.10-embed-amd64.zip'
+          $expected = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
+          $dir = Join-Path $PWD '.build\bundled-runtime'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $target = Join-Path $dir $package
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -UseBasicParsing -Uri "https://www.python.org/ftp/python/3.12.10/$package" -OutFile $target -TimeoutSec 300
+          $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Bundled runtime digest mismatch for ${package}: expected $expected, got $actual"
+          }
+          Write-Host "Bundled runtime verified: $package ($actual)"
+
       - name: Build safe Windows release package
         shell: powershell
-        run: .\scripts\build\BuildWindowsReleasePackage.ps1 -ProjectRoot "$PWD"
+        run: .\scripts\build\BuildWindowsReleasePackage.ps1 -ProjectRoot "$PWD" -BundledRuntimeDir "$PWD\.build\bundled-runtime"
 
       - name: Smoke-test release package in a Unicode path
         shell: powershell
@@ -84,6 +104,33 @@ jobs:
           $downloadedExecutables = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.exe')
           if ($downloadedExecutables.Count -ne 0) {
             throw 'Safe Windows release package must not contain prebuilt .exe files.'
+          }
+
+          # The bundled runtime has to arrive as the untouched upstream archive.
+          # Had anything extracted it into the package, the .exe check above
+          # would already have failed, so this only proves the bytes are intact.
+          $bundledRuntime = Join-Path $root 'runtime\python-3.12.10-embed-amd64.zip'
+          if (-not (Test-Path -LiteralPath $bundledRuntime -PathType Leaf)) {
+            throw 'Release package is missing the bundled Python runtime archive.'
+          }
+          $bundledExpected = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
+          $bundledActual = (Get-FileHash -LiteralPath $bundledRuntime -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($bundledActual -ne $bundledExpected) {
+            throw "Bundled runtime archive digest mismatch: expected $bundledExpected, got $bundledActual"
+          }
+
+          # Prove the offline path a first-time user actually takes. A downloads
+          # directory appearing here would mean the bundled archive was skipped
+          # and the run quietly depended on the network after all.
+          $coldRoot = Join-Path $env:RUNNER_TEMP 'CodexBridge cold runtime test'
+          Remove-Item -LiteralPath $coldRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $prepared = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\windows\StartCodexBridge.ps1') -ProjectRoot $root -StateRootOverride $coldRoot -PrepareRuntimeOnly
+          if ($LASTEXITCODE -ne 0) { throw "Bundled runtime cold-start preparation failed: $prepared" }
+          if (-not (Test-Path -LiteralPath (Join-Path $coldRoot 'runtime\python\python.exe') -PathType Leaf)) {
+            throw 'Bundled runtime did not produce a usable python.exe.'
+          }
+          if (Test-Path -LiteralPath (Join-Path $coldRoot 'downloads')) {
+            throw 'The bundled runtime path must not fall back to a network download.'
           }
 
           $launcher = Join-Path $root '.build\CodexBridgeLauncher.exe'

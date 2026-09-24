@@ -2290,6 +2290,27 @@ def _looks_internal_official_model(model: object) -> bool:
     return value.startswith("gpt-") and ("terra" in value)
 
 
+def _http_upstream_is_direct_official(
+    *, route_official: bool, internal_official_model: bool, is_responses_path: bool
+) -> bool:
+    """Decide whether an HTTP request must bypass CC Switch for the ChatGPT backend.
+
+    Two cases qualify, and both are limited to the Responses path because the direct
+    upstream path is built for it:
+
+    * the route is Official, so Codex is talking to its own account and CC Switch is
+      not part of that path;
+    * the model is a Codex-internal Official model, which must never be handed to a
+      third-party proxy even while the route itself is third-party.
+
+    Keeping both cases behind one predicate is the point. The WebSocket path already
+    goes direct on an Official route; the HTTP fallback used to disagree with it and
+    stayed on CC Switch, so an Official POST returned a 502 whenever CC Switch was
+    closed - on the one route that is documented as not needing CC Switch.
+    """
+    return bool(is_responses_path and (route_official or internal_official_model))
+
+
 def _payload_has_conversation_work(payload: object) -> bool:
     """Conservatively identify a user/session Responses request.
 
@@ -3445,7 +3466,7 @@ class CatalogConfigGuard:
         if source is None or not source.is_file():
             return
         try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
+            payload = json.loads(self._read_text_with_retry(source))
             models = _catalog_model_ids(payload)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return
@@ -3513,7 +3534,7 @@ class CatalogConfigGuard:
         return True
 
     def _read_catalog(self, path: Path) -> object:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(self._read_text_with_retry(path))
 
     def _is_bridge_owned_catalog(self, path: Path | None) -> bool:
         if path is None:
@@ -3670,6 +3691,25 @@ class CatalogConfigGuard:
         # repin model_provider=custom / :15722 just before the Bridge is stopped.
         return self.detach_flag_path.exists()
 
+    def _read_text_with_retry(self, path: Path) -> str:
+        """Read a file CC Switch or Codex may be atomically replacing right now.
+
+        The write side already retries ``os.replace`` for this race. Retrying the
+        read as well keeps a transient sharing violation from aborting a whole guard
+        pass, which previously surfaced as a "could not reconcile config" warning and
+        left route-derived keys such as ``supports_websockets`` stale.
+        """
+        last_error: PermissionError | None = None
+        for attempt in range(8):
+            try:
+                return path.read_text(encoding="utf-8")
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.025 * (attempt + 1))
+        if last_error is None:
+            raise OSError(f"could not read {path}")
+        raise last_error
+
     def _write_config_lines(self, original: str, lines: list[str]) -> bool:
         if self._detach_requested():
             return False
@@ -3716,7 +3756,7 @@ class CatalogConfigGuard:
     def _ensure_bridge_config(
         self, catalog: Path | None, *, route_official: bool | None = None
     ) -> bool:
-        text = self.config_path.read_text(encoding="utf-8")
+        text = self._read_text_with_retry(self.config_path)
         lines = text.splitlines()
         quote = lambda value: json.dumps(value, ensure_ascii=False)
         self._set_top_level(lines, "model_provider", quote(self.bridge_provider_id))
@@ -3799,19 +3839,6 @@ class CatalogConfigGuard:
         )
         return self._write_config_lines(text, lines)
 
-    def _set_config_catalog(self, target: Path) -> bool:
-        text = self.config_path.read_text(encoding="utf-8")
-        current = self._catalog_from_config(text)
-        if current == target:
-            return False
-        lines = text.splitlines()
-        self._set_top_level(
-            lines,
-            "model_catalog_json",
-            json.dumps(str(target), ensure_ascii=False),
-        )
-        return self._write_config_lines(text, lines)
-
     def _publish_official_catalog(self) -> Path:
         if not self.bundled_catalog_path.is_file():
             raise OSError(f"bundled Official model catalog does not exist: {self.bundled_catalog_path}")
@@ -3851,7 +3878,7 @@ class CatalogConfigGuard:
             return
         if not self.config_path.is_file():
             return
-        text = self.config_path.read_text(encoding="utf-8")
+        text = self._read_text_with_retry(self.config_path)
         mode = self._config_mode(text)
         current = self._catalog_from_config(text)
         selected_model = self._top_level_value(text, "model") or ""
@@ -3964,15 +3991,27 @@ class CatalogConfigGuard:
         else:
             scoped_catalog = self._publish_third_party_catalog(self.last_source_path, route_models)
 
-        if scoped_catalog is not None and current != scoped_catalog:
-            if self._ensure_bridge_config(
+        if scoped_catalog is not None:
+            # Re-assert the bridge-owned keys on every pass, not only when the
+            # catalog path changes. supports_websockets is derived from the route, so
+            # gating the write on a catalog change lets it stay stale at "false" after
+            # a CC Switch template rewrite or one failed write - and Codex then picks
+            # the HTTP fallback instead of the direct Official WebSocket.
+            reasserted = self._ensure_bridge_config(
                 scoped_catalog, route_official=(route_kind == "official")
-            ):
-                print(
-                    "Provider-scoped catalog guard: pinned Codex picker to the current provider "
-                    "without changing the selected model.",
-                    flush=True,
-                )
+            )
+            if reasserted:
+                if current != scoped_catalog:
+                    print(
+                        "Provider-scoped catalog guard: pinned Codex picker to the current provider "
+                        "without changing the selected model.",
+                        flush=True,
+                    )
+                else:
+                    _log(
+                        "Provider-scoped catalog guard: re-asserted the bridge config for the "
+                        f"{route_kind} route without changing the model catalog."
+                    )
 
     def _run(self) -> None:
         while not self.stop_event.wait(self.interval):
@@ -5553,11 +5592,16 @@ class BridgeHandler(BaseHTTPRequestHandler):
         http_strict_tool_preflight = False
         http_strict_tool_preflight_omitted = 0
         direct_official_internal_http = False
+        # The route belongs to the request, not to its JSON body, so it is resolved
+        # once here and reused by both the body rewrite and the upstream selection
+        # below. Reading it only inside the JSON branch left the upstream choice
+        # unable to see an Official route at all, which is what sent Official HTTP
+        # traffic to CC Switch and turned a closed CC Switch into a 502.
+        route_official = self._route_looks_official()
         content_type = (self.headers.get("Content-Type") or "").lower()
         if body and "json" in content_type and self.path.rstrip("/").endswith("responses"):
             try:
                 original_payload = json.loads(body.decode("utf-8"))
-                route_official = self._route_looks_official()
                 original_payload, original_model, hot_rewritten, hot_reason = self._hot_switch_rewrite(
                     original_payload
                 )
@@ -5787,8 +5831,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.send_error(400, f"Invalid JSON request body: {exc}")
                 return
 
+        direct_official_http = _http_upstream_is_direct_official(
+            route_official=route_official,
+            internal_official_model=direct_official_internal_http,
+            is_responses_path=self._is_responses_path(),
+        )
         upstream = self.server.upstream  # type: ignore[attr-defined]
-        if direct_official_internal_http:
+        if direct_official_http:
             upstream = self.server.responses_ws_upstream  # type: ignore[attr-defined]
         comp_hash_guard = (
             self._is_models_path()
@@ -5809,9 +5858,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
         # a portable retry is appropriate.
         headers["Accept-Encoding"] = "identity"
 
+        # Every retry below reuses these two values, so a portable retry on an
+        # Official route also stays off CC Switch instead of drifting back to it.
         upstream_path = (
             self._direct_responses_ws_path()
-            if direct_official_internal_http
+            if direct_official_http
             else self._upstream_path()
         )
 
@@ -6117,10 +6168,16 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 http_continuation_delta_bytes,
                 http_continuation_instruction_items,
                 http_continuation_instruction_bytes,
-                "direct-official-internal" if direct_official_internal_http else "cc-switch",
+                (
+                    "direct-official-internal"
+                    if direct_official_internal_http
+                    else "direct-official"
+                    if direct_official_http
+                    else "cc-switch"
+                ),
             )
         except (OSError, http.client.HTTPException) as exc:
-            upstream_label = "Direct Official" if direct_official_internal_http else "CC Switch"
+            upstream_label = "Direct Official" if direct_official_http else "CC Switch"
             if response_started:
                 self.log_message("%s upstream/stream reset after response started: %s", upstream_label, exc)
                 self.close_connection = True

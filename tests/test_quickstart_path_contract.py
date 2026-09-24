@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -64,6 +65,53 @@ class QuickStartPathContractTests(unittest.TestCase):
         self.assertIn("RegisterWatcherAutostart", text)
         self.assertNotIn('key.SetValue(StartupValueName, "\\\"" + exePath + "\\\" --autostart"', text)
         self.assertIn('private const string LauncherVersion = "', text)
+
+    def test_first_run_download_cannot_hang_and_proves_where_it_came_from(self):
+        text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        # Windows PowerShell treats a missing -TimeoutSec as "wait forever", so a
+        # filtered or blackholed python.org used to hang the first run on
+        # "Preparing private Python runtime" without ever printing an error.
+        self.assertIn("-TimeoutSec", text)
+        self.assertIn("Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $Destination -TimeoutSec", text)
+        # python.org alone is not reachable for every user. Mirrors are only safe
+        # because each download is checked against a pinned digest.
+        for mirror in (
+            "https://www.python.org/ftp/python/3.12.10",
+            "https://mirrors.huaweicloud.com/python/3.12.10",
+            "https://registry.npmmirror.com/-/binary/python/3.12.10",
+        ):
+            self.assertIn(mirror, text)
+        self.assertIn("Get-FileHash -LiteralPath $Destination -Algorithm SHA256", text)
+        self.assertIn("SHA-256 mismatch", text)
+        self.assertIn("No pinned SHA-256 for Python runtime package", text)
+
+    def test_every_selectable_runtime_package_has_a_pinned_digest(self):
+        text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        # A Python version bump must not be able to ship a package name that has
+        # no digest: the download would then be refused at run time on every
+        # machine, which is exactly the failure this guard prevents.
+        selectable = set(re.findall(r"return '(python-[^']+\.zip)'", text))
+        pinned = set(re.findall(r"'(python-[^']+\.zip)' = '([0-9a-f]{64})'", text))
+        pinned_names = {name for name, _ in pinned}
+        self.assertEqual(3, len(selectable))
+        self.assertEqual(selectable, pinned_names)
+
+    def test_first_run_failure_is_reported_in_the_user_language_and_logged(self):
+        text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        # Same culture detection as the uninstaller, so one user never gets a
+        # Chinese dialog and an English console.
+        self.assertIn("[Globalization.CultureInfo]::CurrentUICulture.Name", text)
+        self.assertIn("zh-Hant*", text)
+        self.assertIn("bootstrap.log", text)
+        self.assertIn("首次运行需要联网获取 Python 运行时", text)
+        self.assertIn("首次執行需要聯網取得 Python 執行階段", text)
+        self.assertIn("The first run has to download a Python runtime", text)
 
 
 if __name__ == "__main__":

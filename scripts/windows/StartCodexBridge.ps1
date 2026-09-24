@@ -1,6 +1,10 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$ProjectRoot
+    [string]$ProjectRoot,
+    # Lets CI and support prove the runtime selection in isolation. The real
+    # state root is renamed, never deleted, before a cold-start test.
+    [string]$StateRootOverride,
+    [switch]$PrepareRuntimeOnly
 )
 
 Set-StrictMode -Version Latest
@@ -55,44 +59,193 @@ function Get-WindowsPythonPackageName {
     }
 }
 
+# A first run has to download an official python.org embeddable build. python.org
+# alone is not enough: it is routinely unreachable or extremely slow for users in
+# mainland China, and Invoke-WebRequest without -TimeoutSec waits forever, so the
+# script used to hang silently on "Preparing private Python runtime" and report no
+# error at all. The mirrors below serve byte-identical copies of the same artifact
+# and the pinned SHA-256 proves that per download, so falling back to a mirror can
+# never substitute a different runtime.
+$script:PythonRuntimeMirrors = @(
+    'https://www.python.org/ftp/python/3.12.10',
+    'https://mirrors.huaweicloud.com/python/3.12.10',
+    'https://registry.npmmirror.com/-/binary/python/3.12.10'
+)
+$script:PythonRuntimeDigests = @{
+    'python-3.12.10-embed-amd64.zip' = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
+    'python-3.12.10-embed-arm64.zip' = '3065efc3d382d1cda66757ac71ade11904fa6e350f5a97eb74811acd71ba5532'
+    'python-3.12.10-embed-win32.zip' = '084b9eb24cb848605c895d05b738fbc2572efc8b4c18c415a824065864a2b853'
+}
+
+function Write-BootstrapLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$StateRoot,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+    try {
+        $line = '[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f [DateTime]::Now, $Message
+        Add-Content -LiteralPath (Join-Path $StateRoot 'bootstrap.log') -Value $line -Encoding UTF8
+    } catch { }
+}
+
+function Get-BootstrapText {
+    # Same culture detection as UninstallCodexBridge.ps1, so the first-run console
+    # and the uninstall dialog speak the same language to the same user.
+    $culture = [Globalization.CultureInfo]::CurrentUICulture.Name
+    $traditional = $culture -match '^(zh-TW|zh-HK|zh-MO)' -or $culture -like 'zh-Hant*'
+    if ($culture -like 'zh*') {
+        if ($traditional) {
+            return @{
+                Preparing = '[CodexBridge] 正在準備專用 Python 執行階段（僅首次執行需要，約 11 MB）...'
+                Ready = '[CodexBridge] 專用 Python 執行階段已就緒。'
+                FallbackWarning = '無法下載專用 Python 執行階段，改用本機已安裝的 Python：'
+                DownloadFailed = "首次執行需要聯網取得 Python 執行階段，但 python.org 與兩個鏡像都未能完成下載。`r`n請檢查網路或代理設定後，重新雙擊 Start CodexBridge.cmd；也可以先自行安裝 Python 3.10 或更新版本，腳本會自動改用它。"
+                PreparingBundled = '[CodexBridge] 正在安裝隨包附帶的 Python 執行階段（無需聯網）...'
+                BundledRejected = '隨包執行階段不可用，改為聯網取得：'
+                SeeLog = '完整失敗原因已記錄到：'
+            }
+        }
+        return @{
+            Preparing = '[CodexBridge] 正在准备专用 Python 运行时（仅首次运行需要，约 11 MB）...'
+            Ready = '[CodexBridge] 专用 Python 运行时已就绪。'
+            FallbackWarning = '无法下载专用 Python 运行时，改用本机已安装的 Python：'
+            DownloadFailed = "首次运行需要联网获取 Python 运行时，但 python.org 与两个国内镜像都未能完成下载。`r`n请检查网络或代理设置后，重新双击 Start CodexBridge.cmd；也可以先自行安装 Python 3.10 或更高版本，脚本会自动改用它。"
+            PreparingBundled = '[CodexBridge] 正在安装随包附带的 Python 运行时（无需联网）...'
+            BundledRejected = '随包运行时不可用，改为联网获取：'
+            SeeLog = '完整失败原因已记录到：'
+        }
+    }
+    return @{
+        Preparing = '[CodexBridge] Preparing private Python runtime (first run only, about 11 MB)...'
+        Ready = '[CodexBridge] Private Python runtime is ready.'
+        FallbackWarning = 'Could not download the private Python runtime; using existing Python instead:'
+        DownloadFailed = "The first run has to download a Python runtime, but python.org and both mirrors failed.`r`nCheck your network or proxy and run Start CodexBridge.cmd again. Installing Python 3.10 or newer yourself also works: the script then uses that instead."
+        PreparingBundled = '[CodexBridge] Installing the bundled Python runtime (no download needed)...'
+        BundledRejected = 'The bundled runtime was rejected; falling back to a download:'
+        SeeLog = 'Full failure details were written to:'
+    }
+}
+
+function Get-PythonRuntimePackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$Package,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$StateRoot
+    )
+    if (-not $script:PythonRuntimeDigests.ContainsKey($Package)) {
+        throw "No pinned SHA-256 for Python runtime package '$Package'."
+    }
+    $expected = $script:PythonRuntimeDigests[$Package]
+    $failures = New-Object System.Collections.Generic.List[string]
+    # The progress stream costs more than the transfer itself on Windows PowerShell.
+    $ProgressPreference = 'SilentlyContinue'
+    foreach ($mirror in $script:PythonRuntimeMirrors) {
+        $url = "$mirror/$Package"
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $Destination -TimeoutSec 60
+            $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "SHA-256 mismatch: expected $expected, got $actual" }
+            return $url
+        } catch {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            $failures.Add("$url -> $($_.Exception.Message)")
+        }
+    }
+    $detail = $failures -join [Environment]::NewLine
+    Write-BootstrapLog -StateRoot $StateRoot -Message "Python runtime download failed:$([Environment]::NewLine)$detail"
+    throw "Every Python runtime source failed.$([Environment]::NewLine)$detail"
+}
+
+function Install-PythonRuntimeFromZip {
+    param(
+        [Parameter(Mandatory = $true)][string]$Zip,
+        [Parameter(Mandatory = $true)][string]$RuntimeRoot,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+    )
+    # The bundled artifact and a mirror download are the same official python.org
+    # embeddable build, so both clear the identical pinned digest before anything
+    # is extracted. Nothing reaches the runtime directory unverified.
+    $actual = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $ExpectedSha256) {
+        throw "Python runtime digest mismatch: expected $ExpectedSha256, got $actual ($Zip)"
+    }
+
+    $tempRuntime = "$RuntimeRoot.tmp-$PID"
+    Remove-Item -LiteralPath $tempRuntime -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $tempRuntime -Force | Out-Null
+    Expand-Archive -LiteralPath $Zip -DestinationPath $tempRuntime -Force
+    if (-not (Test-Python310 (Join-Path $tempRuntime 'python.exe'))) {
+        Remove-Item -LiteralPath $tempRuntime -Recurse -Force -ErrorAction SilentlyContinue
+        throw 'Python runtime did not start correctly after extraction.'
+    }
+    Remove-Item -LiteralPath $RuntimeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $tempRuntime -Destination $RuntimeRoot -Force
+}
+
 function Ensure-PortablePython {
-    param([string]$StateRoot)
+    param([string]$StateRoot, [string]$ProjectRoot)
     $runtimeRoot = Join-Path $StateRoot 'runtime\python'
     $portablePython = Join-Path $runtimeRoot 'python.exe'
     if (Test-Python310 $portablePython) { return $portablePython }
 
+    $text = Get-BootstrapText
     # An existing user Python is a valid offline fallback. We still prefer our
-    # user-local runtime when it can be downloaded, so later repo moves do not matter.
+    # user-local runtime when it can be prepared, so later repo moves do not matter.
     $systemPython = Find-SystemPython
     $package = Get-WindowsPythonPackageName
-    $url = "https://www.python.org/ftp/python/3.12.10/$package"
+    if (-not $script:PythonRuntimeDigests.ContainsKey($package)) {
+        throw "No pinned SHA-256 for Python runtime package '$package'."
+    }
+    $expected = $script:PythonRuntimeDigests[$package]
+    $tempRuntime = "$runtimeRoot.tmp-$PID"
+
+    # The Release ZIP carries the official python.org embeddable build, so the
+    # normal case needs no reachable python.org at all. Order: bundled artifact,
+    # then the mirrors, then a Python the user already installed.
+    $bundled = Join-Path $ProjectRoot "runtime\$package"
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) {
+        try {
+            Write-Host $text.PreparingBundled -ForegroundColor Cyan
+            Write-BootstrapLog -StateRoot $StateRoot -Message "Installing bundled Python runtime from $bundled."
+            Install-PythonRuntimeFromZip -Zip $bundled -RuntimeRoot $runtimeRoot -ExpectedSha256 $expected
+            Write-Host $text.Ready -ForegroundColor Green
+            Write-BootstrapLog -StateRoot $StateRoot -Message 'Private Python runtime ready from the bundled package.'
+            return $portablePython
+        } catch {
+            Remove-Item -LiteralPath $tempRuntime -Recurse -Force -ErrorAction SilentlyContinue
+            Write-BootstrapLog -StateRoot $StateRoot -Message "Bundled runtime rejected: $($_.Exception.Message)"
+            Write-Warning "$($text.BundledRejected) $($_.Exception.Message)"
+        }
+    }
+
     $downloadRoot = Join-Path $StateRoot 'downloads'
     $zip = Join-Path $downloadRoot $package
-    $tempRuntime = "$runtimeRoot.tmp-$PID"
     New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
-    Remove-Item -LiteralPath $tempRuntime -Recurse -Force -ErrorAction SilentlyContinue
 
     try {
-        Write-Host '[CodexBridge] Preparing private Python runtime (first run only)...' -ForegroundColor Cyan
+        Write-Host $text.Preparing -ForegroundColor Cyan
+        Write-BootstrapLog -StateRoot $StateRoot -Message "Preparing private Python runtime ($package)."
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
-        New-Item -ItemType Directory -Path $tempRuntime -Force | Out-Null
-        Expand-Archive -LiteralPath $zip -DestinationPath $tempRuntime -Force
-        $candidate = Join-Path $tempRuntime 'python.exe'
-        if (-not (Test-Python310 $candidate)) { throw 'Downloaded Python runtime did not start correctly.' }
-        Remove-Item -LiteralPath $runtimeRoot -Recurse -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $tempRuntime -Destination $runtimeRoot -Force
+        $usedSource = Get-PythonRuntimePackage -Package $package -Destination $zip -StateRoot $StateRoot
+        Install-PythonRuntimeFromZip -Zip $zip -RuntimeRoot $runtimeRoot -ExpectedSha256 $expected
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-        Write-Host '[CodexBridge] Private Python runtime is ready.' -ForegroundColor Green
+        Write-Host $text.Ready -ForegroundColor Green
+        Write-BootstrapLog -StateRoot $StateRoot -Message "Private Python runtime ready from $usedSource."
         return $portablePython
     } catch {
         Remove-Item -LiteralPath $tempRuntime -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Write-BootstrapLog -StateRoot $StateRoot -Message "Runtime preparation failed: $($_.Exception.Message)"
         if (-not [string]::IsNullOrWhiteSpace($systemPython)) {
-            Write-Warning "Could not download the private Python runtime; using existing Python instead: $systemPython"
+            Write-Warning "$($text.FallbackWarning) $systemPython"
             return $systemPython
         }
-        throw "Could not prepare Python automatically. Check internet access to python.org and try again. $($_.Exception.Message)"
+        # This is the only thing a user sees when the first run cannot proceed, so it
+        # has to be in their language and say what to do next. The English technical
+        # detail is thrown afterwards so a bug report still carries it.
+        Write-Host $text.DownloadFailed -ForegroundColor Red
+        Write-Host "$($text.SeeLog) $(Join-Path $StateRoot 'bootstrap.log')" -ForegroundColor Red
+        throw "Could not prepare Python automatically. $($_.Exception.Message)"
     }
 }
 
@@ -140,12 +293,24 @@ function Stop-InstalledLauncherProcesses {
 }
 
 $ProjectRoot = Resolve-CodexBridgeFullPath -Path $ProjectRoot -Fallback (Join-Path $PSScriptRoot '..\..')
-$stateRoot = Join-Path $env:LOCALAPPDATA 'CodexProviderBridge'
+$stateRoot = if ([string]::IsNullOrWhiteSpace($StateRootOverride)) {
+    Join-Path $env:LOCALAPPDATA 'CodexProviderBridge'
+} else {
+    [IO.Path]::GetFullPath($StateRootOverride)
+}
 $bootstrapDir = Join-Path $stateRoot 'source-bootstrap'
 New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
 
-$python = Ensure-PortablePython -StateRoot $stateRoot
+$python = Ensure-PortablePython -StateRoot $stateRoot -ProjectRoot $ProjectRoot
 [Environment]::SetEnvironmentVariable('CPB_PYTHON', $python, 'Process')
+
+if ($PrepareRuntimeOnly) {
+    # Prints the selected runtime and proves it executes, then stops. It touches
+    # neither the launcher, nor autostart, nor the Codex config.
+    Write-Host $python
+    & $python -c 'import sys; print(sys.version)'
+    exit 0
+}
 
 # Source quick-start is also an in-place updater for an existing installed copy.
 # A packaged install may have left codex_provider_bridge.exe in the stable app

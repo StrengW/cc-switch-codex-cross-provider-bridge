@@ -63,7 +63,7 @@ It is not a model aggregator and does not replace CC Switch. Its job is **sessio
 1. **First decide whether you need CC Switch — it is a routing entry point, not a prerequisite for a Codex conversation to exist or be resumed:**
    - If you are about to use, or switch to, a **third-party provider configured through CC Switch** (DeepSeek / GLM / Qwen …), **install and open CC Switch first** and configure the providers you want. Adding, removing, and switching providers is always CC Switch's job.
    - If you are only **signing in to OpenAI Official** and continuing an old Codex conversation, you do **not** need to open CC Switch first just because that conversation once went through a third party. Whether CC Switch is required depends only on “does the current request route through it”, not on “did this historical conversation once use a third party”.
-2. **Then double-click to start CodexBridge**: on Windows double-click `Start CodexBridge.cmd`; on macOS double-click `Start CodexBridge.command`. First run prepares a user-local runtime automatically. **No administrator privileges and no manual Python installation are required.**
+2. **Then double-click to start CodexBridge**: on Windows double-click `Start CodexBridge.cmd`; on macOS double-click `Start CodexBridge.command`. First run prepares a user-local runtime automatically. **No administrator privileges, no manual Python installation, and no internet access are required** — the official Python runtime ships inside the Release ZIP.
 3. **Open Codex and use it normally**. To change provider, switch inside CC Switch; CodexBridge automatically handles Bridge routing, the model list, and any required Codex restart.
 4. **Keep CC Switch open the whole time when using third-party providers**. After startup CodexBridge stays resident in the system tray / menu bar and works in the background, so you never edit `config.toml` by hand and never restart CC Switch after each switch.
 
@@ -98,7 +98,9 @@ Extract it, then double-click:
 Start CodexBridge.cmd
 ```
 
-First run prepares a user-local runtime and finishes setup automatically. **No administrator privileges and no manual Python installation are required.**
+First run prepares a user-local runtime and finishes setup automatically. **No administrator privileges, no manual Python installation, and no internet access are required.**
+
+> **The first run needs no internet access.** The Release ZIP bundles the official Python 3.12 runtime (about 11 MB; amd64 on Windows). `Start CodexBridge.cmd` verifies its SHA-256 before extracting it into your user directory, and still compiles the tray launcher on your machine. Only ARM64 or 32-bit Windows, or a bundled archive that fails verification, falls back to a download: python.org first, then the Huawei Cloud and npmmirror mirrors, and every source must match the same pinned SHA-256 before it is accepted. If they all fail, the script explains why in your system language and writes the details to `%LOCALAPPDATA%\CodexProviderBridge\bootstrap.log`; check your network or proxy and run it again, or install Python 3.10 or newer yourself and the script will use that instead.
 
 > The Windows Release **does not distribute a prebuilt `CodexBridge-Setup.exe`**. Do not disable Defender, disable real-time protection, or broadly whitelist the install directory just to run CodexBridge.
 
@@ -293,7 +295,9 @@ This is a known interaction between CC Switch's credential management and CodexB
 <details>
 <summary><strong>Do normal users need Python?</strong></summary>
 
-No manual Python installation is required. First run prepares a user-local runtime automatically.
+No manual Python installation is required. First run prepares a runtime that belongs to your user account only, under `%LOCALAPPDATA%\CodexProviderBridge\runtime` (on macOS, `~/Library/Application Support/CodexProviderBridge/runtime`). It never writes to system directories and needs no administrator privileges.
+
+**The Windows first run needs no internet access either**: the Release ZIP bundles the official Python runtime (about 11 MB, amd64), and the script verifies its SHA-256 before extracting it. Only ARM64 or 32-bit Windows, or a bundled archive that fails verification, downloads instead — python.org, then Huawei Cloud, then npmmirror, all verified against the same pinned SHA-256. If none of them succeed, the script reports it in your system language and writes the reason to `%LOCALAPPDATA%\CodexProviderBridge\bootstrap.log`. Check your network or proxy and retry, or install Python 3.10 or newer and the script will use that instead. The macOS Release ZIP bundles its runtime as well.
 
 </details>
 

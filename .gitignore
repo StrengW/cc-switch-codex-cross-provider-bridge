@@ -1,5 +1,9 @@
 .build/
 
+# The bundled Python runtime archive is fetched and verified by CI at packaging
+# time. It must never be committed, only shipped inside the Release ZIP.
+/runtime/
+
 dist/*
 !dist/.gitkeep
 

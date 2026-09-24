@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "src" / "launcher" / "CodexBridgeLauncher.cs"
@@ -9,6 +10,8 @@ UNINSTALL = ROOT / "scripts" / "windows" / "UninstallCodexBridge.ps1"
 START = ROOT / "scripts" / "windows" / "StartCodexBridge.ps1"
 SETUP_BUILD = ROOT / "scripts" / "build" / "BuildCodexBridgeSetup.ps1"
 ROOT_UNINSTALL = ROOT / "Uninstall CodexBridge.cmd"
+MACOS_UNINSTALL = ROOT / "scripts" / "unix" / "codex_bridge_uninstall.sh"
+MACOS_LAUNCHER = ROOT / "src" / "launcher-macos" / "CodexBridgeLauncher.swift"
 
 
 def _normalized_sha256(path: Path) -> str:
@@ -78,8 +81,64 @@ def test_repo_contains_fallback_uninstall_cmd():
 
 
 def test_uninstall_feature_does_not_modify_bridge_or_manager_core():
-    # Bridge re-baselined for the sanctioned diagnostic-log sanitizer layer and the
-    # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once;
+    # Bridge re-baselined for the sanctioned diagnostic-log sanitizer layer, the
+    # sanctioned route-edge inference fix in CatalogConfigGuard.guard_once, and the
+    # Official-route HTTP upstream fix (route resolved once in _handle, guard
+    # re-asserts its config keys every pass, retrying config reads);
     # conversation-continuation core logic is unchanged. Manager core untouched.
-    assert _normalized_sha256(BRIDGE) == "34b581c3ae07faa211a43a427a51ef88d0bc6356c92fbdb27dc01f5c60cbff84"
+    assert _normalized_sha256(BRIDGE) == "11bda5ae3300aecac9202c4e0885c5f68e7181b89d3ddb51284bd968d9a87a5f"
     assert _normalized_sha256(MANAGER) == "b3f4befd2c3e0b48f034235bd248bddcd02b8d4991a402f34eed6d46a9475480"
+
+
+def test_macos_uninstall_removes_every_bridge_artifact_family():
+    text = MACOS_UNINSTALL.read_text(encoding="utf-8")
+    for pattern in (
+        "config.toml.bridge-backup-*",
+        "config.toml.bridge-direct-official-backup-*",
+        ".*.bridge-tmp-*",
+        ".*.bridge-direct-official-tmp-*",
+        "cpb-*",
+    ):
+        assert pattern in text
+    assert "sudo" not in text
+
+
+def test_macos_uninstall_leaves_codex_config_working_without_clobbering_third_party():
+    text = MACOS_UNINSTALL.read_text(encoding="utf-8")
+    # The handoff is gated on the config actually pointing at the local Bridge,
+    # because prepare-direct-official rewrites model_provider unconditionally.
+    assert "config_points_at_bridge" in text
+    assert "restore_earliest_clean_backup" in text
+    assert "strip_bridge_owned_config_lines" in text
+    # prepare-direct-official arms the detach latch, so it must run while the
+    # Bridge is alive; the backup restore must run only after the stop.
+    assert text.index('"$MANAGER" prepare-direct-official') < text.index('"$MANAGER" stop')
+    assert text.index("restore_earliest_clean_backup; then") > text.index('"$MANAGER" stop')
+
+
+def test_macos_uninstall_dialog_states_the_codex_config_outcome():
+    text = MACOS_LAUNCHER.read_text(encoding="utf-8")
+    assert "restored to the pre-install state or switched back to the direct Official route" in text
+    assert "恢复到安装前状态，或切回 Official 直连" in text
+
+
+def test_macos_uninstall_does_not_mistake_cc_switch_for_the_bridge():
+    text = MACOS_UNINSTALL.read_text(encoding="utf-8")
+    marker = re.search(r"BRIDGE_MARKER_RE='([^']+)'", text).group(1)
+
+    def route(port: int) -> str:
+        return f'base_url = "http://127.0.0.1:{port}/v1"'
+
+    # CC Switch's own upstream port sits directly below the Bridge's managed
+    # range. Matching it would rewrite the config of a CC Switch-only user who
+    # never routed Codex through the Bridge at all.
+    assert not re.search(marker, route(15721))
+    # The managed range the manager itself uses: default port .. default + 199.
+    for port in (15722, 15723, 15730, 15799, 15800, 15919, 15920, 15921):
+        assert re.search(marker, route(port)), port
+    for port in (15721, 15922, 16000, 8080):
+        assert not re.search(marker, route(port)), port
+    # The bundled catalog is the other fingerprint, for installs whose Bridge
+    # was started on a port outside the managed range.
+    assert re.search(marker, 'model_catalog_json = "/home/u/.codex/cpb-bundled-model-catalog.json"')
+    assert re.search(marker, 'base_url = "http://localhost:15722/v1"')

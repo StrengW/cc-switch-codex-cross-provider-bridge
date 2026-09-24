@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,3 +69,46 @@ def test_windows_workflow_runs_on_main_and_tags_and_validates_version():
     assert "push:\n    branches:\n      - main\n    tags:\n      - 'v*'" in workflow
     assert "Validate public version metadata" in workflow
     assert 'does not match VERSION' in workflow
+
+
+def test_windows_release_bundles_the_official_runtime_without_shipping_executables():
+    build = (ROOT / "scripts" / "build" / "BuildWindowsReleasePackage.ps1").read_text(encoding="utf-8-sig")
+    workflow = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
+    # The runtime travels as the untouched upstream archive, so the "no .exe"
+    # guard stays exactly as strict as it was instead of being relaxed to let a
+    # python.exe through. Re-packing upstream bytes would also make the pinned
+    # digest unverifiable against python.org by a user who wants to check.
+    assert "Safe Windows release package must not contain prebuilt .exe files" in workflow
+    assert "-BundledRuntimeDir" in build
+    assert 'BundledRuntimeDir "$PWD\\.build\\bundled-runtime"' in workflow
+    assert "Bundled Python runtime digest mismatch" in build
+    assert "runtime\\python-3.12.10-embed-amd64.zip" in workflow
+    assert "must not fall back to a network download" in workflow
+
+
+def test_pinned_runtime_digest_agrees_everywhere_it_appears():
+    start = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(encoding="utf-8-sig")
+    build = (ROOT / "scripts" / "build" / "BuildWindowsReleasePackage.ps1").read_text(encoding="utf-8-sig")
+    workflow = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
+    amd64 = re.search(r"'python-3\.12\.10-embed-amd64\.zip' = '([0-9a-f]{64})'", start).group(1)
+    # Three copies of one value are only safe if a test fails the moment they
+    # drift. A stale digest here would brick first run for every Windows user.
+    assert {amd64} == set(re.findall(r"\b[0-9a-f]{64}\b", build))
+    assert {amd64} == set(re.findall(r"\b[0-9a-f]{64}\b", workflow))
+
+
+def test_bundled_runtime_is_tried_before_any_download():
+    text = (ROOT / "scripts" / "windows" / "StartCodexBridge.ps1").read_text(encoding="utf-8-sig")
+    workflow = (ROOT / ".github" / "workflows" / "build-windows-release.yml").read_text(encoding="utf-8")
+    body = text[text.index("function Ensure-PortablePython"):]
+    # Bundled first, then the mirrors, then a Python the user already installed.
+    # Anything else would leave the common case depending on python.org again.
+    assert body.index('Join-Path $ProjectRoot "runtime\\$package"') < body.index("Get-PythonRuntimePackage -Package")
+    assert "Install-PythonRuntimeFromZip" in text
+    assert "[switch]$PrepareRuntimeOnly" in text
+    assert "[string]$StateRootOverride" in text
+    # The diagnostic exit has to happen before the script starts stopping
+    # processes or rewriting the installed copy.
+    assert text.index("if ($PrepareRuntimeOnly)") < text.index("Stop-InstalledLauncherProcesses -InstallRoot")
+    # CI is the only caller of that diagnostic mode, so pin the invocation here.
+    assert "-StateRootOverride $coldRoot -PrepareRuntimeOnly" in workflow
