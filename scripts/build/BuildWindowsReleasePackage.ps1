@@ -53,6 +53,7 @@ $files = @(
     'docs\COMPATIBILITY.md',
     'docs\VERSIONING.md',
     'docs\PROJECT_OVERVIEW.zh-CN.md',
+    'docs\USER_GUIDE.zh-CN.md',
     'src\bridge\codex_provider_bridge.py',
     'src\launcher\CodexBridgeLauncher.cs',
     'src\launcher\LauncherUiText.cs',

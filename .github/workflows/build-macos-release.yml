@@ -173,7 +173,7 @@ jobs:
           /usr/bin/ditto "$RUNNER_TEMP/CodexBridge.app" "$stage/CodexBridge.app"
           cp README.md README.en.md VERSION CHANGELOG.md SECURITY.md "$stage/"
           mkdir -p "$stage/docs"
-          cp docs/ARCHITECTURE.md docs/COMPATIBILITY.md docs/VERSIONING.md docs/PROJECT_OVERVIEW.zh-CN.md "$stage/docs/"
+          cp docs/ARCHITECTURE.md docs/COMPATIBILITY.md docs/VERSIONING.md docs/PROJECT_OVERVIEW.zh-CN.md docs/USER_GUIDE.zh-CN.md "$stage/docs/"
           chmod +x "$stage/Start CodexBridge.command" "$stage/scripts/unix/"*.sh "$stage/CodexBridge.app/Contents/MacOS/CodexBridge"
 
           release_id="$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq '.id')"
@@ -330,6 +330,9 @@ jobs:
           test -f "$verify/CodexBridge/BUILD.txt"
           test -f "$verify/CodexBridge/docs/ARCHITECTURE.md"
           test -f "$verify/CodexBridge/docs/COMPATIBILITY.md"
+          test -f "$verify/CodexBridge/docs/VERSIONING.md"
+          test -f "$verify/CodexBridge/docs/PROJECT_OVERVIEW.zh-CN.md"
+          test -f "$verify/CodexBridge/docs/USER_GUIDE.zh-CN.md"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$verify/CodexBridge/CodexBridge.app"
 
       - name: Notarize tagged macOS archive

@@ -121,7 +121,7 @@ The local Bridge remains the stable compatibility layer at `127.0.0.1:15722`.
 
 When a third-party route is active, the Launcher observes the CC Switch proxy on `127.0.0.1:15721`. If the proxy disappears, it reports that CC Switch must be opened; it never revives CC Switch on a proxy drop or after the user closes it, and never selects or launches it via system discovery, a remembered path, or a default install path. Codex is restarted only under the already-tested route/model refresh policy, not merely because the proxy was temporarily unavailable.
 
-The single exception is the provable Provider/auth switch repair flow (Windows C# launcher and macOS menu bar launcher). When a third-party route is active, the pinned custom provider has `requires_openai_auth = true`, and `~/.codex/auth.json` carries no live ChatGPT credential, a Codex restart would land on the login screen. On a real provider-switch edge (a route-key change, never a proxy drop), the Launcher binds the currently-running, path-verified CC Switch instance and restarts that same instance once - bounded, one-shot per switch key, and loop-free (the watcher will not relaunch an already-running Launcher, and the supervisor is muted during the expected `:15721` drop) - then asks the user to restart Codex (see **Codex restart behavior** below). The bound executable path comes only from the live process (Windows: the verified process path; macOS: the live CC Switch app from `NSWorkspace.runningApplications`, relaunched by its explicit bundle path); it is never discovered, persisted, or taken from a default location. If no live instance can be bound or the bounded restart fails, the Launcher skips the Codex restart reminder and asks the user to reopen CC Switch instead. CodexBridge never writes `auth.json`; CC Switch re-materializes the credential on its own restart.
+The single exception is the provable Provider/auth switch repair flow (Windows C# launcher and macOS menu bar launcher). When a third-party route is active, the pinned custom provider has `requires_openai_auth = true`, and `~/.codex/auth.json` carries no live ChatGPT credential, a Codex restart would land on the login screen. The mismatch originates in CC Switch: it manages Codex's ChatGPT OAuth itself, and when a third-party provider is selected it stops keeping those tokens as live credentials in `auth.json` and moves to API-key / managed-stub mode. A running Codex masks that with the token already in memory, so only a restart exposes it. On a real provider-switch edge (a route-key change, never a proxy drop), the Launcher binds the currently-running, path-verified CC Switch instance and restarts that same instance once - bounded, one-shot per switch key, and loop-free (the watcher will not relaunch an already-running Launcher, and the supervisor is muted during the expected `:15721` drop) - then asks the user to restart Codex (see **Codex restart behavior** below). The bound executable path comes only from the live process (Windows: the verified process path; macOS: the live CC Switch app from `NSWorkspace.runningApplications`, relaunched by its explicit bundle path); it is never discovered, persisted, or taken from a default location. If no live instance can be bound or the bounded restart fails, the Launcher skips the Codex restart reminder and asks the user to reopen CC Switch instead. CodexBridge never writes `auth.json`; CC Switch re-materializes the credential on its own restart. When the repair could not complete, signing in with ChatGPT once from the login screen, reopening CC Switch, or switching back to Official each restore a consistent credential state; the route stays pinned to the local Bridge either way, so the conversation is unaffected.
 
 Official traffic can continue while CC Switch is closed.
 
@@ -150,7 +150,24 @@ It is not an uninstall operation.
 
 The Windows uninstaller removes CodexBridge-owned application/runtime/log/startup/watcher state and restores the pre-install Codex configuration when a usable snapshot is available. If a complete snapshot is unavailable, it prepares a safe direct-Official fallback. Saved Codex chat/session history is not deleted.
 
-## 9. Correctness-first design invariants
+## 9. Runtime preparation
+
+The Bridge is Python. Neither platform asks the user to install Python, to hold administrator privileges, or to write outside their own account: the first run prepares a private runtime under the per-user state root (`%LOCALAPPDATA%\CodexProviderBridge\runtime` on Windows, `~/Library/Application Support/CodexProviderBridge/runtime` on macOS).
+
+Both Release packages bundle that runtime, so the normal first run is offline. The Windows ZIP carries the official python.org embeddable build for amd64; the macOS ZIP carries a python-build-standalone CPython 3.12 selected by name from the upstream release at build time. Each published asset has a `.sha256` file beside it.
+
+Windows resolves the runtime in a fixed order:
+
+1. an already-prepared private runtime;
+2. the bundled archive inside the package, verified against a pinned SHA-256 before it is extracted;
+3. a download from python.org, then the Huawei Cloud and npmmirror mirrors, each verified against that same pinned digest;
+4. a Python 3.10 or newer that the user installed themselves, used only once every source above has failed.
+
+The digest table is keyed by package name and covers amd64, arm64, and win32. A package with no pinned digest is rejected outright instead of being installed unverified, so raising the Python version cannot quietly introduce an unchecked artifact. ARM64 and 32-bit Windows are not bundled and therefore take the download path. An archive that fails verification is deleted rather than installed. When no source succeeds, the script explains why in the system language (Simplified Chinese, Traditional Chinese, or English) and writes the per-source detail to `bootstrap.log` in the state root.
+
+The digest proves integrity, not authenticity: it shows the bytes match the pinned upstream release, and it is not a security certification. The tray launcher is still compiled on the user's own machine, and no self-built executable ships in a Release package.
+
+## 10. Correctness-first design invariants
 
 1. **Never let a stale provider cursor override the visible Codex task state.**
 2. **Never reuse provider-private state across a provider/model boundary without proof.**
@@ -161,7 +178,7 @@ The Windows uninstaller removes CodexBridge-owned application/runtime/log/startu
 
 These invariants are why CodexBridge can optimize continuation when safe while still retaining a conservative stateless fallback for new or partially compatible providers.
 
-## 10. Compatibility scope
+## 11. Compatibility scope
 
 See [`COMPATIBILITY.md`](COMPATIBILITY.md) for regression-tested route families, best-effort providers, and the capability assumptions required for an untested provider to work.
 
